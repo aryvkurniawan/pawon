@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"pawon/internal/proc"
 	"pawon/internal/sites"
@@ -89,5 +91,42 @@ func TestEnvGetPut(t *testing.T) {
 	New(d).ServeHTTP(w2, httptest.NewRequest("GET", "/api/sites/"+id+"/env", nil))
 	if !strings.Contains(w2.Body.String(), "APP_KEY=base64:xyz") {
 		t.Fatalf("get env: %s", w2.Body)
+	}
+}
+
+// TestStaticEmbed: UI dari embed FS — / → index.html, /static/app.css,
+// aset lain (/app.js), dan path /api/* tak dikenal → 404 JSON.
+func TestStaticEmbed(t *testing.T) {
+	d := testDeps(t)
+	d.Web = fstest.MapFS{
+		"index.html":     &fstest.MapFile{Data: []byte("<html>dashboard</html>")},
+		"app.js":         &fstest.MapFile{Data: []byte("console.log(1)")},
+		"static/app.css": &fstest.MapFile{Data: []byte("body{}")},
+	}
+	h := New(d)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "dashboard") {
+		t.Fatalf("index: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/static/app.css", nil))
+	if w.Code != 200 || w.Body.String() != "body{}" {
+		t.Fatalf("css: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/app.js", nil))
+	if w.Code != 200 {
+		t.Fatalf("app.js: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/tidak-ada", nil))
+	var v map[string]string
+	if w.Code != 404 || json.Unmarshal(w.Body.Bytes(), &v) != nil || v["error"] == "" {
+		t.Fatalf("api 404 JSON: %d %s", w.Code, w.Body)
+	}
+	if _, ok := any(d.Web).(fs.FS); !ok {
+		t.Fatal("Web harus fs.FS")
 	}
 }

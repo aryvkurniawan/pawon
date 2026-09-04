@@ -3,6 +3,7 @@
 package server
 
 import (
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,7 @@ type Deps struct {
 	Sup        *proc.Supervisor
 	MariadbDSN func() string // root dsn untuk create db
 	LogsDir    string
+	Web        fs.FS // UI embed (web/, di-set main.go); nil → 404
 }
 
 // New membangun mux API (Go 1.22 pattern) + slot static UI.
@@ -44,13 +46,28 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("PUT /api/sites/{id}/env", h.envPut)
 	mux.HandleFunc("POST /api/dbs", h.dbCreate)
 	mux.HandleFunc("GET /api/logs/{name...}", h.logs)
-	mux.Handle("/", static())
+	mux.Handle("/", static(d.Web))
 	return mux
 }
 
-// static melayani UI; Task 11 mengganti body ini dengan embed web/.
-func static() http.Handler {
-	return http.HandlerFunc(http.NotFound)
+// static melayani UI dari embed.FS. web/ ada di root repo sedangkan package
+// ini di internal/server, jadi //go:embed wajib di main.go (embed hanya bisa
+// membaca file di bawah dir package-nya) dan FS-nya di-inject lewat Deps.
+// "/" → index.html, /<name>.html & aset (/app.js, /static/*) via FileServer;
+// path /api/* yang tidak cocok pattern mux → 404 JSON konsisten dengan API.
+func static(web fs.FS) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p == "api" || strings.HasPrefix(p, "api/") {
+			writeErr(w, http.StatusNotFound, "not found: %s", r.URL.Path)
+			return
+		}
+		if web == nil {
+			http.NotFound(w, r)
+			return
+		}
+		http.FileServer(http.FS(web)).ServeHTTP(w, r)
+	})
 }
 
 // CFAdapter mengimplementasikan sites.Cloudflare di atas tunnel.API
