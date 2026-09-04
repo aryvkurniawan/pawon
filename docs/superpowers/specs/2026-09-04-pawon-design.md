@@ -27,7 +27,7 @@ pawon.exe (Go, web UI di http://127.0.0.1:7080)
  └─ supervise: cloudflared.exe  `tunnel run --token <tunnel-token>` (remotely-managed)
 ```
 
-- **pawon.exe** = satu binary Go. UI statis (HTML+vanilla JS) di-embed via `embed.FS`. Tanpa framework web, tanpa npm.
+- **pawon.exe** = satu binary Go. UI statis (HTML + vanilla JS + Tailwind CSS) di-embed via `embed.FS`. Tailwind dikompile jadi satu `app.css` saat build pakai standalone CLI (satu exe, tanpa npm/node) — runtime tetap dependency-free, tanpa CDN. Tanpa framework web JS.
 - **Supervisi**: panel spawn semua service sebagai child process di dalam satu *Windows Job Object* dengan `KILL_ON_JOB_CLOSE` — panel mati → semua anak ikut mati (tidak ada proses yatim). Restart otomatis dengan backoff (3× cepat, lalu 30s) per service. Panel sendiri bisa jalan sebagai Windows Service (`pawon.exe service install`) via `golang.org/x/sys/windows/svc`, atau foreground di console.
 - **State**: satu file `pawon-data/pawon.json` (lihat §5). Vhost nginx digenerate dari state. Tanpa database untuk panel.
 - **Dependensi Go**: stdlib + `golang.org/x/sys` (job object, service) + `go-sql-driver/mysql` untuk MariaDB (§8). CF API dipanggil langsung via `net/http` (tanpa SDK).
