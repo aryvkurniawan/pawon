@@ -355,7 +355,7 @@ func ensurePhpIni(phpHome, logsDir, version string) error {
 	if _, err := os.Stat(ini); err == nil {
 		return nil
 	}
-	ext := []string{"pdo_mysql", "mysqli", "mbstring", "gd", "zip", "intl", "sodium", "exif", "fileinfo", "curl"}
+	ext := []string{"openssl", "pdo_mysql", "mysqli", "mbstring", "gd", "zip", "intl", "sodium", "exif", "fileinfo", "curl"}
 	var b strings.Builder
 	fmt.Fprintln(&b, "; pawon: generated — panel tidak menimpa php.ini yang sudah ada")
 	fmt.Fprintln(&b, `extension_dir = "ext"`)
