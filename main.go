@@ -95,12 +95,16 @@ func panel(stop chan struct{}) error {
 	logsDir := filepath.Join(dataDir, "logs")
 	mainConf := filepath.Join(root, "nginx", "conf", "main.conf")
 
+	trace := func(stage string) { fmt.Fprintln(os.Stderr, "pawon: "+stage) }
 	st, err := state.Load(statePath)
 	if err != nil {
 		return err
 	}
+	trace("state dimuat")
 	seed(&st)
+	trace("seed")
 
+	trace("download stack (first-run bisa lama)")
 	if err := dl.Ensure(root, versions.Pinned); err != nil {
 		return err
 	}
@@ -110,14 +114,19 @@ func panel(stop chan struct{}) error {
 	if err != nil {
 		return err
 	}
+	trace("stack siap: " + filepath.Base(nginxHome))
 	mariaHome, err := svc.FindDir(filepath.Join(root, "bin", "mariadb"), filepath.Join("bin", "mariadbd.exe"))
 	if err != nil {
 		return err
 	}
 
+	trace("mariadb home ok")
 	datadir := filepath.Join(dataDir, "mysql")
 	freshDB := false
 	if _, err := os.Stat(datadir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			return err
+		}
 		if err := db.InitDatadir(mariaHome, datadir); err != nil {
 			return err
 		}
@@ -129,10 +138,12 @@ func panel(stop chan struct{}) error {
 	if err := st.Save(statePath); err != nil {
 		return err
 	}
+	trace("datadir siap (fresh=" + fmt.Sprint(freshDB) + ") + state tersimpan")
 
 	if err := writeNginxConf(&st, root, nginxHome, mainConf, logsDir); err != nil {
 		return err
 	}
+	trace("config nginx ditulis")
 	// phpMyAdmin internal (pma.test): config + vhost + hosts (idempoten).
 	if err := wirePMA(root, st.DB.RootPassword); err != nil {
 		fmt.Fprintln(os.Stderr, "pawon: pma:", err)
@@ -164,7 +175,8 @@ func panel(stop chan struct{}) error {
 		if err := ensurePhpIni(filepath.Join(root, "bin", "php", v.Version), logsDir, v.Version); err != nil {
 			return err
 		}
-		for _, spec := range php.Instances(v) {
+		for i, spec := range php.Instances(v) {
+			spec.Name = fmt.Sprintf("php-%s-%d", v.Version, i+1)
 			spec.Exe = filepath.Join(root, spec.Exe)
 			spec.Dir = filepath.Join(root, spec.Dir)
 			sup.Set(spec)
@@ -241,8 +253,11 @@ func panel(stop chan struct{}) error {
 func startOrder(st *state.Config) []string {
 	names := []string{"mariadb"}
 	for _, v := range st.PHPVersions {
-		if v.Enabled {
-			names = append(names, "php-"+v.Version)
+		if !v.Enabled {
+			continue
+		}
+		for i := 1; i <= php.Workers; i++ {
+			names = append(names, fmt.Sprintf("php-%s-%d", v.Version, i))
 		}
 	}
 	return append(names, "nginx")
@@ -283,7 +298,12 @@ func writeNginxConf(st *state.Config, root, nginxHome, mainConf, logsDir string)
 	if err := nginx.WriteAll(confDir, filepath.Join(confDir, "sites.d"), root, ups, vhosts); err != nil {
 		return err
 	}
-	return copyIfMissing(filepath.Join(nginxHome, "conf", "mime.types"), filepath.Join(confDir, "mime.types"))
+	for _, f := range []string{"mime.types", "fastcgi_params"} {
+		if err := copyIfMissing(filepath.Join(nginxHome, "conf", f), filepath.Join(confDir, f)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // nginxRunner: Runner sites.Manager yang memvalidasi main.conf panel —

@@ -33,7 +33,7 @@ async function api(path, { method = "GET", body, raw = false, quiet = false } = 
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { msg = JSON.parse(data).error || msg; } catch { if (data) msg = data; }
+    try { msg = (typeof data === "string" ? JSON.parse(data) : data).error || msg; } catch { if (typeof data === "string" && data) msg = data; }
     if (!quiet) toast(msg, "err");
     throw new Error(msg);
   }
@@ -53,7 +53,7 @@ function toast(msg, kind = "ok") {
 async function phpVersions() {
   try {
     const s = await api("/api/status", { quiet: true });
-    return (s.services || []).filter((x) => x.Name.startsWith("php-")).map((x) => x.Name.slice(4));
+    return [...new Set((s.services || []).filter((x) => /^php-[\d.]+-\d+$/.test(x.Name)).map((x) => x.Name.replace(/^php-/, "").replace(/-\d+$/, "")))];
   } catch { return []; }
 }
 

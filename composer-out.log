@@ -1,0 +1,12 @@
+[32mCreating a "laravel/laravel" project at "./demo"[39m
+
+[33mIn Factory.php line 656:[39m
+[37;41m                                                                                                                       [39;49m
+[37;41m  The openssl extension is required for SSL/TLS protection but is not available. If you can not enable the openssl ex  [39;49m
+[37;41m  tension, you can disable this error, at your own risk, by setting the 'disable-tls' option to true.                  [39;49m
+[37;41m                                                                                                                       [39;49m
+
+[32mcreate-project [-s|--stability STABILITY] [--prefer-source] [--prefer-dist] [--prefer-install PREFER-INSTALL] [--repository REPOSITORY] [--repository-url REPOSITORY-URL] [--add-repository] [--require REQUIRE] [--dev] [--no-dev] [--no-custom-installers] [--no-scripts] [--no-progress] [--no-secure-http] [--keep-vcs] [--remove-vcs] [--no-install] [--no-audit] [--audit-format AUDIT-FORMAT] [--no-security-blocking] [--no-blocking] [--ignore-platform-req IGNORE-PLATFORM-REQ] [--ignore-platform-reqs] [--ask] [--] [<package> [<directory> [<version>]]][39m
+
+
+composer exit: exit status 1

@@ -153,7 +153,7 @@ func (h handlers) tunnelSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handlers) tunnelStatus(w http.ResponseWriter, r *http.Request) {
-	if h.Tunnel == nil || h.Tunnel.API == nil {
+	if h.Tunnel == nil || h.Tunnel.API == nil || h.St.Cloudflare.TunnelID == "" {
 		writeErr(w, http.StatusNotFound, "tunnel belum di-setup")
 		return
 	}
