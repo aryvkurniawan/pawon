@@ -20,6 +20,7 @@ import (
 	"pawon/internal/cf"
 	"pawon/internal/db"
 	"pawon/internal/dl"
+	"pawon/internal/hosts"
 	"pawon/internal/nginx"
 	"pawon/internal/php"
 	"pawon/internal/proc"
@@ -115,10 +116,12 @@ func panel(stop chan struct{}) error {
 	}
 
 	datadir := filepath.Join(dataDir, "mysql")
+	freshDB := false
 	if _, err := os.Stat(datadir); os.IsNotExist(err) {
 		if err := db.InitDatadir(mariaHome, datadir); err != nil {
 			return err
 		}
+		freshDB = true
 	}
 	if st.DB.RootPassword == "" {
 		st.DB.RootPassword = db.GenRootPassword()
@@ -129,6 +132,10 @@ func panel(stop chan struct{}) error {
 
 	if err := writeNginxConf(&st, root, nginxHome, mainConf, logsDir); err != nil {
 		return err
+	}
+	// phpMyAdmin internal (pma.test): config + vhost + hosts (idempoten).
+	if err := wirePMA(root, st.DB.RootPassword); err != nil {
+		fmt.Fprintln(os.Stderr, "pawon: pma:", err)
 	}
 
 	sup := proc.New()
@@ -153,6 +160,9 @@ func panel(stop chan struct{}) error {
 	for _, v := range st.PHPVersions {
 		if !v.Enabled {
 			continue
+		}
+		if err := ensurePhpIni(filepath.Join(root, "bin", "php", v.Version), logsDir, v.Version); err != nil {
+			return err
 		}
 		for _, spec := range php.Instances(v) {
 			spec.Exe = filepath.Join(root, spec.Exe)
@@ -190,6 +200,11 @@ func panel(stop chan struct{}) error {
 	}
 	if err := tun.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "pawon: start cloudflared:", err)
+	}
+	if freshDB {
+		if err := db.SetRootPassword(mariaHome, st.DB.RootPassword); err != nil {
+			fmt.Fprintln(os.Stderr, "pawon: set root password:", err)
+		}
 	}
 
 	webSub, err := fs.Sub(webFS, "web")
@@ -311,4 +326,71 @@ func stackRoot() (string, error) {
 		return "", err
 	}
 	return filepath.Abs(filepath.Dir(exe))
+}
+
+// ensurePhpIni: zip PHP tidak membawa php.ini aktif — tulis minimal:
+// extension Laravel + error log per versi (spec §7). Idempoten.
+func ensurePhpIni(phpHome, logsDir, version string) error {
+	ini := filepath.Join(phpHome, "php.ini")
+	if _, err := os.Stat(ini); err == nil {
+		return nil
+	}
+	ext := []string{"pdo_mysql", "mysqli", "mbstring", "gd", "zip", "intl", "sodium", "exif", "fileinfo", "curl"}
+	var b strings.Builder
+	fmt.Fprintln(&b, "; pawon: generated — panel tidak menimpa php.ini yang sudah ada")
+	fmt.Fprintln(&b, `extension_dir = "ext"`)
+	for _, e := range ext {
+		fmt.Fprintf(&b, "extension=%s\n", e)
+	}
+	fmt.Fprintln(&b, "error_reporting = E_ALL")
+	fmt.Fprintln(&b, "display_errors = Off")
+	fmt.Fprintln(&b, "log_errors = On")
+	fmt.Fprintf(&b, "error_log = %s\n", filepath.ToSlash(filepath.Join(logsDir, "php-"+version+".log")))
+	return os.WriteFile(ini, []byte(b.String()), 0o644)
+}
+
+// wirePMA: phpMyAdmin sebagai site internal pma.test — config auth_type=config
+// (kredensial root dari state), vhost, baris hosts. Semua idempoten.
+func wirePMA(root, rootPW string) error {
+	pmaHome, err := svc.FindDir(filepath.Join(root, "bin", "pma"), "index.php")
+	if err != nil {
+		return err
+	}
+	cfg := filepath.Join(pmaHome, "config.inc.php")
+	if _, err := os.Stat(cfg); os.IsNotExist(err) {
+		c := `<?php
+$i = 0; $i++;
+$cfg['Servers'][$i]['auth_type'] = 'config';
+$cfg['Servers'][$i]['host'] = '127.0.0.1';
+$cfg['Servers'][$i]['port'] = '3306';
+$cfg['Servers'][$i]['user'] = 'root';
+$cfg['Servers'][$i]['password'] = '` + rootPW + `';
+$cfg['Servers'][$i]['AllowNoPassword'] = false;
+`
+		if err := os.WriteFile(cfg, []byte(c), 0o600); err != nil {
+			return err
+		}
+	}
+	confDir := filepath.Join(root, "nginx", "conf", "sites.d")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		return err
+	}
+	vhost := filepath.Join(confDir, "pma.test.conf")
+	if _, err := os.Stat(vhost); os.IsNotExist(err) {
+		logs := filepath.Join(root, "pawon-data", "logs", "nginx")
+		v := nginx.RenderVhost(nginx.Vhost{
+			ServerNames: []string{"pma.test"},
+			Docroot:     pmaHome,
+			Pool:        php.PoolName("8.4"),
+			AccessLog:   filepath.ToSlash(filepath.Join(logs, "pma.test-access.log")),
+			ErrorLog:    filepath.ToSlash(filepath.Join(logs, "pma.test-error.log")),
+		})
+		if err := os.WriteFile(vhost, []byte(v), 0o644); err != nil {
+			return err
+		}
+	}
+	if sysroot := os.Getenv("SystemRoot"); sysroot != "" {
+		_ = hosts.Add(filepath.Join(sysroot, "System32", "drivers", "etc", "hosts"), "pma.test")
+	}
+	return nil
 }

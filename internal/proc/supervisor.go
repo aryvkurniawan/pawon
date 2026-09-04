@@ -14,7 +14,7 @@ import (
 
 // Spec defines a supervised service.
 type Spec struct {
-	Name string   // "nginx", "php-8.4", "mariadb", "cloudflared"
+	Name string // "nginx", "php-8.4", "mariadb", "cloudflared"
 	Exe  string
 	Args []string
 	Env  []string // format "K=V"

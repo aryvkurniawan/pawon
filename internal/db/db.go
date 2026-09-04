@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
+	"time"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -58,4 +58,24 @@ func CreateDatabase(dsn, name, user, pass string) error {
 		}
 	}
 	return nil
+}
+
+// SetRootPassword: menunggu mariadbd siap (retry 30×1s) lalu ALTER USER root —
+// datadir fresh dibuat tanpa password; DSN panel butuh password ini.
+func SetRootPassword(mariadbDir, pw string) error {
+	bin := filepath.Join(mariadbDir, "bin")
+	exe := filepath.Join(bin, "mariadb.exe")
+	var lastErr error
+	for range 30 {
+		cmd := exec.Command(exe, "-u", "root", "-e",
+			fmt.Sprintf("ALTER USER 'root'@'localhost' IDENTIFIED BY '%s'; FLUSH PRIVILEGES;", esc(pw)))
+		cmd.Dir = bin
+		if out, err := cmd.CombinedOutput(); err == nil {
+			return nil
+		} else {
+			lastErr = fmt.Errorf("set root password: %w: %s", err, out)
+		}
+		time.Sleep(time.Second)
+	}
+	return lastErr
 }

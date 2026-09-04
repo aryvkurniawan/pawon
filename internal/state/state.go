@@ -32,20 +32,20 @@ type Zone struct {
 }
 
 type Site struct {
-	ID        string    `json:"id"`
-	Subdomain string    `json:"subdomain"`
-	ZoneID    string    `json:"zone_id"`
-	Hostname  string    `json:"hostname"`
-	Root      string    `json:"root"`
-	Docroot   string    `json:"docroot"`
-	Type      string    `json:"type"` // "php"|"laravel"
-	PHP       string    `json:"php"`  // "8.4"
-	DB        *DBCreds  `json:"db,omitempty"`
-	NginxConf string    `json:"nginx_conf"`
-	DNSRecordID string  `json:"dns_record_id"`
-	IngressOK bool      `json:"ingress_ok"`
-	DNSOK     bool      `json:"dns_ok"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	Subdomain   string    `json:"subdomain"`
+	ZoneID      string    `json:"zone_id"`
+	Hostname    string    `json:"hostname"`
+	Root        string    `json:"root"`
+	Docroot     string    `json:"docroot"`
+	Type        string    `json:"type"` // "php"|"laravel"
+	PHP         string    `json:"php"`  // "8.4"
+	DB          *DBCreds  `json:"db,omitempty"`
+	NginxConf   string    `json:"nginx_conf"`
+	DNSRecordID string    `json:"dns_record_id"`
+	IngressOK   bool      `json:"ingress_ok"`
+	DNSOK       bool      `json:"dns_ok"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type DBCreds struct {

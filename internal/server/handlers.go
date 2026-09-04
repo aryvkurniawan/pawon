@@ -43,7 +43,7 @@ func (h handlers) status(w http.ResponseWriter, r *http.Request) {
 		resp.Services = h.Sup.Status()
 	}
 	resp.Sites = len(h.St.Sites)
-	if h.Tunnel != nil && h.Tunnel.API != nil {
+	if h.Tunnel != nil && h.Tunnel.API != nil && h.St.Cloudflare.TunnelID != "" {
 		t, err := h.Tunnel.Status()
 		if err != nil {
 			resp.Err = err.Error()
