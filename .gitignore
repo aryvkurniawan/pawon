@@ -1,0 +1,7 @@
+# hasil build & tooling lokal
+pawon.exe
+tools/
+bin/
+sites/
+pawon-data/
+web/static/app.css
