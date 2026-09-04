@@ -1,11 +1,11 @@
-# panel-win — Desain & Spec
+# Pawon — Desain & Spec
 
 Tanggal: 2026-09-04
 Status: Draft untuk review
 
 ## 1. Tujuan
 
-Panel web UI (localhost) untuk mengelola webserver stack di Windows: **nginx + PHP + MariaDB + Cloudflare Tunnel**. Use case utama: nambah website = isi form (subdomain, folder, opsi Laravel/DB) → site live di `https://<subdomain>.<domain-kamu>` lewat Cloudflare Tunnel dalam hitungan detik, tanpa edit config manual.
+**Pawon** — panel web UI (localhost) untuk mengelola webserver stack di Windows: **nginx + PHP + MariaDB + Cloudflare Tunnel**. Use case utama: nambah website = isi form (subdomain, folder, opsi Laravel/DB) → site live di `https://<subdomain>.<domain-kamu>` lewat Cloudflare Tunnel dalam hitungan detik, tanpa edit config manual.
 
 Target user: pemilik mesin (homelab/self-host), satu akun Cloudflare. Bukan produk multi-user.
 
@@ -20,23 +20,23 @@ Target user: pemilik mesin (homelab/self-host), satu akun Cloudflare. Bukan prod
 ## 3. Arsitektur
 
 ```
-panel.exe (Go, web UI di http://127.0.0.1:7080)
+pawon.exe (Go, web UI di http://127.0.0.1:7080)
  ├─ supervise: nginx.exe        listen :80, vhost per site (conf/sites.d/*.conf)
  ├─ supervise: php-cgi.exe ×4   listen 127.0.0.1:9100–9103, upstream pool nginx
- ├─ supervise: mariadbd.exe     listen :3306, datadir <stack>/panel-data/mysql
+ ├─ supervise: mariadbd.exe     listen :3306, datadir <stack>/pawon-data/mysql
  └─ supervise: cloudflared.exe  `tunnel run --token <tunnel-token>` (remotely-managed)
 ```
 
-- **panel.exe** = satu binary Go. UI statis (HTML+vanilla JS) di-embed via `embed.FS`. Tanpa framework web, tanpa npm.
-- **Supervisi**: panel spawn semua service sebagai child process di dalam satu *Windows Job Object* dengan `KILL_ON_JOB_CLOSE` — panel mati → semua anak ikut mati (tidak ada proses yatim). Restart otomatis dengan backoff (3× cepat, lalu 30s) per service. Panel sendiri bisa jalan sebagai Windows Service (`panel.exe service install`) via `golang.org/x/sys/windows/svc`, atau foreground di console.
-- **State**: satu file `panel-data/panel.json` (lihat §5). Vhost nginx digenerate dari state. Tanpa database untuk panel.
+- **pawon.exe** = satu binary Go. UI statis (HTML+vanilla JS) di-embed via `embed.FS`. Tanpa framework web, tanpa npm.
+- **Supervisi**: panel spawn semua service sebagai child process di dalam satu *Windows Job Object* dengan `KILL_ON_JOB_CLOSE` — panel mati → semua anak ikut mati (tidak ada proses yatim). Restart otomatis dengan backoff (3× cepat, lalu 30s) per service. Panel sendiri bisa jalan sebagai Windows Service (`pawon.exe service install`) via `golang.org/x/sys/windows/svc`, atau foreground di console.
+- **State**: satu file `pawon-data/pawon.json` (lihat §5). Vhost nginx digenerate dari state. Tanpa database untuk panel.
 - **Dependensi Go**: stdlib + `golang.org/x/sys` (job object, service) + `go-sql-driver/mysql` untuk MariaDB (§8). CF API dipanggil langsung via `net/http` (tanpa SDK).
 
 ## 4. Layout Folder
 
 ```
-panel-win/
-├─ panel.exe
+pawon/
+├─ pawon.exe
 ├─ bin/                    # hasil auto-download first-run
 │  ├─ nginx/               # conf/nginx.conf, conf/sites.d/*.conf
 │  ├─ php/                 # php-cgi.exe, php.ini, composer.phar
@@ -44,22 +44,22 @@ panel-win/
 │  └─ cloudflared.exe
 ├─ sites/                  # default root semua site
 │  └─ <site-name>/         # atau folder Laravel yang sudah ada
-└─ panel-data/
-   ├─ panel.json           # state panel
+└─ pawon-data/
+   ├─ pawon.json           # state
    ├─ mysql/               # datadir MariaDB
    └─ logs/                # stdout/stderr semua service + access/error log nginx
 ```
 
 First-run: panel download & extract semua binary dari URL ter-pin (versi & URL di satu file `internal/versions.go`): nginx (nginx.org zip), PHP NTS x64 (windows.php.net), MariaDB zip (archive.mariadb.org), cloudflared (`github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe`), composer.phar (getcomposer.org). Kalau file sudah ada, skip. `ponytail:` tanpa checksum verifikasi — sumber HTTPS resmi; tambah sha256 pin kalau mau strict.
 
-## 5. State: `panel.json`
+## 5. State: `pawon.json`
 
 ```jsonc
 {
   "cloudflare": {
     "api_token": "...",            // scope: Account→Tunnel:Edit, Zone→DNS:Edit
     "account_id": "...",           // terisi dari GET /accounts saat setup
-    "tunnel_id": "...",            // dibuat panel: name "panel-win", config_src=cloudflare
+    "tunnel_id": "...",            // dibuat panel: name "pawon", config_src=cloudflare
     "tunnel_token": "...",         // dari POST .../cfd_tunnel/{id}/token, dipakai cloudflared
     "zones": [{ "id": "...", "name": "domainkamu.com" }]
   },
@@ -69,11 +69,11 @@ First-run: panel download & extract semua binary dari URL ter-pin (versi & URL d
       "subdomain": "app",
       "zone_id": "...",
       "hostname": "app.domainkamu.com",
-      "root": "C:/panel-win/sites/app",        // root fisik
-      "docroot": "C:/panel-win/sites/app/public", // = root, atau root+"/public" (laravel)
+      "root": "C:/pawon/sites/app",        // root fisik
+      "docroot": "C:/pawon/sites/app/public", // = root, atau root+"/public" (laravel)
       "type": "php" | "laravel",
       "db": { "name": "app", "user": "app", "password": "..." } | null,
-      "nginx_conf": "panel-data/generated/app.domainkamu.com.conf",
+      "nginx_conf": "pawon-data/generated/app.domainkamu.com.conf",
       "dns_record_id": "...",      // id CNAME di CF, untuk hapus site
       "created_at": "..."
     }
@@ -88,7 +88,7 @@ Tunnel bersifat **remotely-managed** (`config_src=cloudflare`): ingress rules te
 
 **Setup sekali (halaman Tunnel):**
 1. User paste API token → panel `GET /accounts` (ambil account pertama) & `GET /zones?per_page=50` (untuk dropdown domain).
-2. Panel `POST /accounts/{id}/cfd_tunnel` body `{"name":"panel-win","config_src":"cloudflare"}` → `tunnel_id`.
+2. Panel `POST /accounts/{id}/cfd_tunnel` body `{"name":"pawon","config_src":"cloudflare"}` → `tunnel_id`.
 3. Panel `POST /accounts/{id}/cfd_tunnel/{tunnel_id}/token` → `tunnel_token` (disimpan state, dipakai argumen `--token` cloudflared).
 4. Ingress awal: hanya catch-all `{"service":"http_status:404"}`.
 5. Panel spawn cloudflared. Status konektor dicek via `GET /accounts/{id}/cfd_tunnel/{id}` (field `connections` / `status`).
@@ -112,7 +112,7 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
   server {
       listen 80;
       server_name app.domainkamu.com;
-      root "C:/panel-win/sites/app/public";
+      root "C:/pawon/sites/app/public";
       index index.php index.html;
       location / { try_files $uri $uri/ /index.php?$query_string; }
       location ~ \.php$ {
@@ -144,7 +144,7 @@ POST   /api/tunnel/setup              # body: api_token → jalankan flow §6 se
 GET    /api/tunnel/status             # status konektor + list ingress aktif
 POST   /api/sites/{id}/composer       # body: {args:[...]} → php composer.phar, stream output
 POST   /api/dbs                       # body: {site_id} → create db+user (§8)
-GET    /api/logs/{service}?tail=200   # baca file log di panel-data/logs
+GET    /api/logs/{service}?tail=200   # baca file log di pawon-data/logs
 ```
 
 Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HTML+JS statis, fetch ke API di atas.
@@ -159,7 +159,7 @@ Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HT
 
 ## 11. Keamanan
 
-- Panel bind loopback; CF token plaintext di `panel.json` (`ponytail:` homelab single-user; upgrade path: DPAPI/Credential Manager).
+- Panel bind loopback; CF token plaintext di `pawon.json` (`ponytail:` homelab single-user; upgrade path: DPAPI/Credential Manager).
 - Token scope minimal: `Account → Cloudflare Tunnel:Edit` + `Zone → DNS:Edit` (Zone Resources: All zones).
 - cloudflared→nginx plaintext HTTP lokal — tidak meninggalkan mesin.
 - Panel TIDAK mengekspos endpoint eksekusi arbitrary selain composer (argumen dibatasi subcommand whitelist: `create-project`, `require`, `install`, `update`, `dump-autoload`).
@@ -172,7 +172,7 @@ Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HT
 
 ## 13. Milestone Implementasi
 
-1. **Skeleton**: Go module, embed UI, `panel.json` state, supervisor + Job Object, service install, halaman Dashboard status.
+1. **Skeleton**: Go module, embed UI, `pawon.json` state, supervisor + Job Object, service install, halaman Dashboard status.
 2. **Bootstrap stack**: downloader (§4), mariadb init, php/nginx siap start, start/stop service dari UI.
 3. **Sites lokal**: add/remove site (vhost + reload + nginx -t), site PHP statis jalan via `localhost` header test.
 4. **Tunnel**: CF client (zones/accounts/tunnel/config/dns), halaman Tunnel setup, wiring add-site → ingress + CNAME.
