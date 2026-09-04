@@ -12,7 +12,6 @@ Target user: pemilik mesin (homelab/self-host), satu akun Cloudflare. Bukan prod
 ## 2. Non-Goals (v1)
 
 - Multi-user / auth panel (bind `127.0.0.1` saja, no auth).
-- Multi versi PHP per-site (satu versi PHP global, switchable manual).
 - Reverse proxy ke app non-PHP (Node/Python) — arsitektur mengakomodasi (ingress bisa point ke port lain), tapi UI/flow-nya v2.
 - SSL lokal (Let's Encrypt di sisi nginx) — SSL ditangani Cloudflare di edge; koneksi cloudflared→nginx adalah plaintext HTTP lokal.
 - Linux/macOS support.
@@ -22,7 +21,7 @@ Target user: pemilik mesin (homelab/self-host), satu akun Cloudflare. Bukan prod
 ```
 pawon.exe (Go, web UI di http://127.0.0.1:7080)
  ├─ supervise: nginx.exe        listen :80, vhost per site (conf/sites.d/*.conf)
- ├─ supervise: php-cgi.exe ×4   listen 127.0.0.1:9100–9103, upstream pool nginx
+ ├─ supervise: php-cgi.exe     1 pool (4 instance) per versi PHP — 127.0.0.1:9100+, 9200+, ...
  ├─ supervise: mariadbd.exe     listen :3306, datadir <stack>/pawon-data/mysql
  └─ supervise: cloudflared.exe  `tunnel run --token <tunnel-token>` (remotely-managed)
 ```
@@ -39,7 +38,7 @@ pawon/
 ├─ pawon.exe
 ├─ bin/                    # hasil auto-download first-run
 │  ├─ nginx/               # conf/nginx.conf, conf/sites.d/*.conf
-│  ├─ php/                 # php-cgi.exe, php.ini, composer.phar
+│  ├─ php/<ver>/           # php-cgi.exe + php.ini per versi; composer.phar di bin/php/
 │  ├─ mariadb/
 │  └─ cloudflared.exe
 ├─ sites/                  # default root semua site
@@ -71,6 +70,7 @@ First-run: panel download & extract semua binary dari URL ter-pin (versi & URL d
       "hostname": "app.domainkamu.com",
       "root": "C:/pawon/sites/app",        // root fisik
       "docroot": "C:/pawon/sites/app/public", // = root, atau root+"/public" (laravel)
+      "php": "8.4",                         // versi pool FastCGI yang dipakai site
       "type": "php" | "laravel",
       "db": { "name": "app", "user": "app", "password": "..." } | null,
       "nginx_conf": "pawon-data/generated/app.domainkamu.com.conf",
@@ -106,25 +106,26 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
 
 ## 7. nginx & PHP
 
-- `bin/nginx/conf/nginx.conf` statis: `http { upstream php_pool { server 127.0.0.1:9100; 9101; 9102; 9103; } include sites.d/*.conf; }`.
+- `bin/nginx/conf/nginx.conf` statis: `include sites.d/*.conf`. Upstream pool **digenerate per versi PHP**: `upstream php_84_pool { server 127.0.0.1:9100; 9101; 9102; 9103; }` — port_base = 9100 + 100×indeks versi, tercatat di state `php_versions`.
 - Vhost per site (`sites.d/<hostname>.conf`), satu template, root = `docroot`:
   ```nginx
   server {
       listen 80;
-      server_name app.domainkamu.com;
+      server_name app.domainkamu.com app.localhost;
       root "C:/pawon/sites/app/public";
       index index.php index.html;
       location / { try_files $uri $uri/ /index.php?$query_string; }
       location ~ \.php$ {
           try_files $fastcgi_script_name =404;
           include fastcgi_params;
-          fastcgi_pass php_pool;
+          fastcgi_pass php_84_pool;   # nama pool dari site.php_version
           fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
       }
   }
   ```
-  Template sama untuk php & laravel — bedanya cuma `docroot`. (Laravel perlu `try_files ... /index.php?$query_string` — sudah ada di atas.)
-- PHP: build **NTS** (FastCGI memang pakai NTS). 4 instance `php-cgi.exe -b 127.0.0.1:910N` masing-masing `PHP_FCGI_MAX_REQUESTS=500` — deterministic, menghindari kelemahan PHP_FCGI_CHILDREN di Windows. `php.ini` production-ish dengan extension Laravel: pdo_mysql, mysqli, mbstring, openssl, fileinfo, gd, zip, intl, curl, sodium, exif.
+  Template sama untuk php & laravel — bedanya cuma `docroot` dan nama pool. (Laravel perlu `try_files ... /index.php?$query_string` — sudah ada di atas.)
+- **Alias lokal**: tiap vhost dapat `server_name <sub>.<domain> <sub>.localhost`. Panel (jalan sebagai service, LocalSystem) menambah/menghapus baris `127.0.0.1 <sub>.localhost` di `drivers/etc/hosts` saat add/remove site — test lokal jalan tanpa tunnel. Kalau hosts terkunci AV, alias tetap ada di vhost (browser modern resolve `.localhost` sendiri) + warning di UI.
+- **Multi-PHP**: per versi = folder `bin/php/<ver>/` (build NTS + php.ini, extension Laravel: pdo_mysql, mysqli, mbstring, openssl, fileinfo, gd, zip, intl, curl, sodium, exif) + 4 instance `php-cgi.exe -b 127.0.0.1:<port>` dengan `PHP_FCGI_MAX_REQUESTS=500` — deterministic, menghindari kelemahan PHP_FCGI_CHILDREN di Windows. Versi ter-pin di `versions.go` (default 8.4; 8.3/8.2/8.1 opsional). Dropdown versi di form site = versi terinstal.
 - Reload nginx SELALU lewat `nginx -t` dulu; kalau gagal, config baru dibatalkan (file lama dipulihkan), error ditampilkan di UI.
 
 ## 8. MariaDB
@@ -132,6 +133,7 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
 - First-run MariaDB: `mariadb-install-db.exe --datadir=...` → password root acak disimpan di state.
 - `mariadbd.exe --datadir=... --port=3306 --console` sebagai supervised child.
 - "Create DB" per site: satu koneksi `database/sql` + driver `go-sql-driver/mysql` (satu-satunya dep Go non-x/sys) → `CREATE DATABASE` + `CREATE USER ... IDENTIFIED BY` + `GRANT ALL`. Kredensial ditampilkan sekali di UI (untuk `.env` Laravel).
+- **phpMyAdmin**: bundel sebagai tool internal — downloader fetch phpMyAdmin zip, panel auto-buat site `pma.localhost` (vhost + hosts) dengan `config.inc.php` `auth_type=config` memakai kredensial root dari state → buka langsung masuk, tanpa login form.
 
 ## 9. Panel API (internal, konsumsi UI)
 
@@ -143,6 +145,7 @@ GET    /api/zones                     # list zone dari CF (cache)
 POST   /api/tunnel/setup              # body: api_token → jalankan flow §6 setup
 GET    /api/tunnel/status             # status konektor + list ingress aktif
 POST   /api/sites/{id}/composer       # body: {args:[...]} → php composer.phar, stream output
+GET/PUT /api/sites/{id}/env     # baca/tulis file .env di root site (editor textarea)
 POST   /api/dbs                       # body: {site_id} → create db+user (§8)
 GET    /api/logs/{service}?tail=200   # baca file log di pawon-data/logs
 ```
@@ -151,7 +154,7 @@ Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HT
 
 ## 10. Error Handling
 
-- **Port bentrok** (80, 3306, 7080, 9100–9103): dicek saat startup & sebelum start service; pesan menyebut proses pemilik (netstat).
+- **Port bentrok** (80, 3306, 7080, port pool PHP 9100+): dicek saat startup & sebelum start service; pesan menyebut proses pemilik (netstat).
 - **nginx config invalid**: gate `nginx -t` (§7); config lama dipulihkan otomatis.
 - **CF API error**: ditampilkan di UI + log; state site ditandai `dns_ok`/`ingress_ok` per langkah supaya bisa di-retry tanpa duplikat (ingress di-match by hostname; DNS di-query by name sebelum create).
 - **Child mati**: restart backoff (§3); status di Dashboard merah + alasan exit terakhir.
@@ -177,6 +180,7 @@ Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HT
 3. **Sites lokal**: add/remove site (vhost + reload + nginx -t), site PHP statis jalan via `localhost` header test.
 4. **Tunnel**: CF client (zones/accounts/tunnel/config/dns), halaman Tunnel setup, wiring add-site → ingress + CNAME.
 5. **Laravel & DB**: composer runner, create DB/user, template docroot public.
-6. **Polish**: log viewer, retry/health, error surface.
+6. **Multi-PHP & tools**: pool per versi + dropdown versi, bundel phpMyAdmin, alias *.localhost + hosts file, .env editor.
+7. **Polish**: log viewer, retry/health, error surface.
 
 Setiap milestone harus berakhir di keadaan jalan (panel bisa di-start), commit per milestone.
