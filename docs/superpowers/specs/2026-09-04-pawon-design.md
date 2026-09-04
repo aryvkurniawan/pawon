@@ -46,8 +46,8 @@ pawon/
 └─ pawon-data/
    ├─ pawon.json           # state
    ├─ mysql/               # datadir MariaDB
-   └─ logs/                # stdout/stderr semua service + access/error log nginx
-```
+   └─ logs/                # pawon.log, nginx-error.log, nginx/<site>-{access,error}.log,
+                           # php-<ver>.log, mariadb.log, cloudflared.log
 
 First-run: panel download & extract semua binary dari URL ter-pin (versi & URL di satu file `internal/versions.go`): nginx (nginx.org zip), PHP NTS x64 (windows.php.net), MariaDB zip (archive.mariadb.org), cloudflared (`github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe`), composer.phar (getcomposer.org). Kalau file sudah ada, skip. `ponytail:` tanpa checksum verifikasi — sumber HTTPS resmi; tambah sha256 pin kalau mau strict.
 
@@ -113,6 +113,8 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
       listen 80;
       server_name app.domainkamu.com app.test;
       root "C:/pawon/sites/app/public";
+      access_log "C:/pawon/pawon-data/logs/nginx/app.domainkamu.com-access.log";
+      error_log  "C:/pawon/pawon-data/logs/nginx/app.domainkamu.com-error.log";
       index index.php index.html;
       location / { try_files $uri $uri/ /index.php?$query_string; }
       location ~ \.php$ {
@@ -126,6 +128,7 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
   Template sama untuk php & laravel — bedanya cuma `docroot` dan nama pool. (Laravel perlu `try_files ... /index.php?$query_string` — sudah ada di atas.)
 - **Alias lokal**: tiap vhost dapat `server_name <sub>.<domain> <sub>.test` (`.test` = TLD RFC 2606 khusus testing, tak mungkin bentrok domain asli). Panel (jalan sebagai service, LocalSystem) menambah/menghapus baris `127.0.0.1 <sub>.test` di `drivers/etc/hosts` saat add/remove site — test lokal jalan tanpa tunnel. `.test` tidak di-resolve browser sendiri (beda dengan `.localhost`), jadi kalau hosts terkunci AV → warning di UI.
 - **Multi-PHP**: per versi = folder `bin/php/<ver>/` (build NTS + php.ini, extension Laravel: pdo_mysql, mysqli, mbstring, openssl, fileinfo, gd, zip, intl, curl, sodium, exif) + 4 instance `php-cgi.exe -b 127.0.0.1:<port>` dengan `PHP_FCGI_MAX_REQUESTS=500` — deterministic, menghindari kelemahan PHP_FCGI_CHILDREN di Windows. Versi ter-pin di `versions.go` (default 8.4; 8.3/8.2/8.1 opsional). Dropdown versi di form site = versi terinstal.
+- **Error log** (penting untuk debugging): `php.ini` per versi → `log_errors=On`, `error_reporting=E_ALL`, `display_errors=Off`, `error_log=<stack>/pawon-data/logs/php-<ver>.log`. nginx → `error_log` global + access/error per site (lihat template). `mariadbd` & `cloudflared`: stdout/stderr ditangkap panel → `pawon-data/logs/`. Panel sendiri: `pawon.log` (aksi + error internal). Untuk site Laravel, log viewer juga expose `<root>/storage/logs/laravel.log` — log aplikasi yang paling sering dibaca.
 - Reload nginx SELALU lewat `nginx -t` dulu; kalau gagal, config baru dibatalkan (file lama dipulihkan), error ditampilkan di UI.
 
 ## 8. MariaDB
@@ -147,7 +150,8 @@ GET    /api/tunnel/status             # status konektor + list ingress aktif
 POST   /api/sites/{id}/composer       # body: {args:[...]} → php composer.phar, stream output
 GET/PUT /api/sites/{id}/env     # baca/tulis file .env di root site (editor textarea)
 POST   /api/dbs                       # body: {site_id} → create db+user (§8)
-GET    /api/logs/{service}?tail=200   # baca file log di pawon-data/logs
+GET    /api/logs/{name}?tail=200      # tail log: pawon, nginx-error, nginx/<site>-*, php-<ver>,
+                                      # mariadb, cloudflared, laravel:<site>; + buka folder log
 ```
 
 Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HTML+JS statis, fetch ke API di atas.
@@ -181,6 +185,6 @@ Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HT
 4. **Tunnel**: CF client (zones/accounts/tunnel/config/dns), halaman Tunnel setup, wiring add-site → ingress + CNAME.
 5. **Laravel & DB**: composer runner, create DB/user, template docroot public.
 6. **Multi-PHP & tools**: pool per versi + dropdown versi, bundel phpMyAdmin, alias *.test + hosts file, .env editor.
-7. **Polish**: log viewer, retry/health, error surface.
+7. **Polish**: log viewer (pilih sumber, tail + auto-refresh, tombol buka folder log), retry/health, error surface.
 
 Setiap milestone harus berakhir di keadaan jalan (panel bisa di-start), commit per milestone.
