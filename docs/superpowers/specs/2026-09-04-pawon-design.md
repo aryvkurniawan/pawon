@@ -111,7 +111,7 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
   ```nginx
   server {
       listen 80;
-      server_name app.domainkamu.com app.localhost;
+      server_name app.domainkamu.com app.test;
       root "C:/pawon/sites/app/public";
       index index.php index.html;
       location / { try_files $uri $uri/ /index.php?$query_string; }
@@ -124,7 +124,7 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
   }
   ```
   Template sama untuk php & laravel — bedanya cuma `docroot` dan nama pool. (Laravel perlu `try_files ... /index.php?$query_string` — sudah ada di atas.)
-- **Alias lokal**: tiap vhost dapat `server_name <sub>.<domain> <sub>.localhost`. Panel (jalan sebagai service, LocalSystem) menambah/menghapus baris `127.0.0.1 <sub>.localhost` di `drivers/etc/hosts` saat add/remove site — test lokal jalan tanpa tunnel. Kalau hosts terkunci AV, alias tetap ada di vhost (browser modern resolve `.localhost` sendiri) + warning di UI.
+- **Alias lokal**: tiap vhost dapat `server_name <sub>.<domain> <sub>.test` (`.test` = TLD RFC 2606 khusus testing, tak mungkin bentrok domain asli). Panel (jalan sebagai service, LocalSystem) menambah/menghapus baris `127.0.0.1 <sub>.test` di `drivers/etc/hosts` saat add/remove site — test lokal jalan tanpa tunnel. `.test` tidak di-resolve browser sendiri (beda dengan `.localhost`), jadi kalau hosts terkunci AV → warning di UI.
 - **Multi-PHP**: per versi = folder `bin/php/<ver>/` (build NTS + php.ini, extension Laravel: pdo_mysql, mysqli, mbstring, openssl, fileinfo, gd, zip, intl, curl, sodium, exif) + 4 instance `php-cgi.exe -b 127.0.0.1:<port>` dengan `PHP_FCGI_MAX_REQUESTS=500` — deterministic, menghindari kelemahan PHP_FCGI_CHILDREN di Windows. Versi ter-pin di `versions.go` (default 8.4; 8.3/8.2/8.1 opsional). Dropdown versi di form site = versi terinstal.
 - Reload nginx SELALU lewat `nginx -t` dulu; kalau gagal, config baru dibatalkan (file lama dipulihkan), error ditampilkan di UI.
 
@@ -133,7 +133,7 @@ Semua hostname berakhir di `http://localhost:80` (satu port); nginx memutuskan s
 - First-run MariaDB: `mariadb-install-db.exe --datadir=...` → password root acak disimpan di state.
 - `mariadbd.exe --datadir=... --port=3306 --console` sebagai supervised child.
 - "Create DB" per site: satu koneksi `database/sql` + driver `go-sql-driver/mysql` (satu-satunya dep Go non-x/sys) → `CREATE DATABASE` + `CREATE USER ... IDENTIFIED BY` + `GRANT ALL`. Kredensial ditampilkan sekali di UI (untuk `.env` Laravel).
-- **phpMyAdmin**: bundel sebagai tool internal — downloader fetch phpMyAdmin zip, panel auto-buat site `pma.localhost` (vhost + hosts) dengan `config.inc.php` `auth_type=config` memakai kredensial root dari state → buka langsung masuk, tanpa login form.
+- **phpMyAdmin**: bundel sebagai tool internal — downloader fetch phpMyAdmin zip, panel auto-buat site `pma.test` (vhost + hosts) dengan `config.inc.php` `auth_type=config` memakai kredensial root dari state → buka langsung masuk, tanpa login form.
 
 ## 9. Panel API (internal, konsumsi UI)
 
@@ -180,7 +180,7 @@ Bind `127.0.0.1:7080`. UI: 4 halaman (Dashboard, Sites, Tunnel, Settings) — HT
 3. **Sites lokal**: add/remove site (vhost + reload + nginx -t), site PHP statis jalan via `localhost` header test.
 4. **Tunnel**: CF client (zones/accounts/tunnel/config/dns), halaman Tunnel setup, wiring add-site → ingress + CNAME.
 5. **Laravel & DB**: composer runner, create DB/user, template docroot public.
-6. **Multi-PHP & tools**: pool per versi + dropdown versi, bundel phpMyAdmin, alias *.localhost + hosts file, .env editor.
+6. **Multi-PHP & tools**: pool per versi + dropdown versi, bundel phpMyAdmin, alias *.test + hosts file, .env editor.
 7. **Polish**: log viewer, retry/health, error surface.
 
 Setiap milestone harus berakhir di keadaan jalan (panel bisa di-start), commit per milestone.
