@@ -81,7 +81,7 @@ Dokumen desain: [`docs/superpowers/specs/2026-09-04-pawon-design.md`](docs/super
 
 ## Status / Catatan
 
-- ⚠️ Smoke end-to-end (first-run download nyata + add site + pma + laravel) belum dijalankan di mesin fresh — unit test semua package hijau; verifikasi runtime menyusul.
+- ✅ Smoke end-to-end terverifikasi: first-run download, 6 service hijau, add/remove site (`*.test` 200 via FastCGI), Laravel via composer (`demo.test` 200), phpMyAdmin auto-login. Belum diverifikasi: setup tunnel (butuh paste token Cloudflare milik pengguna).
 - Fitur tunnel butuh paste token Cloudflare milikmu (tidak ada kredensial di repo).
 - Lihat [CHANGELOG.md](CHANGELOG.md).
 
