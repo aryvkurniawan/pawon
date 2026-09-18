@@ -36,6 +36,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/services/{name}/stop", h.service("stop"))
 	mux.HandleFunc("POST /api/services/{name}/restart", h.service("restart"))
 	mux.HandleFunc("GET /api/sites", h.sitesList)
+	mux.HandleFunc("GET /api/sites/scan", h.sitesScan)
 	mux.HandleFunc("POST /api/sites", h.sitesAdd)
 	mux.HandleFunc("DELETE /api/sites/{id}", h.sitesDelete)
 	mux.HandleFunc("GET /api/zones", h.zones)

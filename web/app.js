@@ -234,13 +234,16 @@ async function loadSites() {
   $("#sites-body").innerHTML = sites.map((s) => `
     <tr class="border-t border-slate-800">
       <td class="px-3 py-2">
-        <a class="text-emerald-400 hover:underline" href="https://${esc(s.hostname)}" target="_blank" rel="noopener">${esc(s.hostname)}</a>
-        <div class="text-xs text-slate-500">http://${esc(s.subdomain)}.test</div>
+        ${s.local_only
+          ? `<span class="text-slate-200">${esc(s.hostname)}</span>`
+          : `<a class="text-emerald-400 hover:underline" href="https://${esc(s.hostname)}" target="_blank" rel="noopener">${esc(s.hostname)}</a>`}
+        ${s.local_only ? `<div class="text-xs text-slate-500">lokal — hanya dari mesin ini</div>`
+                       : `<div class="text-xs text-slate-500">http://${esc(s.subdomain)}.test</div>`}
       </td>
       <td class="px-3 py-2">${esc(s.type)}</td>
       <td class="px-3 py-2">${esc(s.php)}</td>
       <td class="px-3 py-2">${s.db ? `<span class="text-emerald-400">${esc(s.db.name)}</span> <span class="text-xs text-slate-500">${esc(s.db.user)}</span>` : `<span class="text-xs text-slate-500">tanpa DB</span>`}</td>
-      <td class="px-3 py-2 space-x-1">${badge(s.ingress_ok, "ingress", "ingress?")} ${badge(s.dns_ok, "dns", "dns?")}</td>
+      <td class="px-3 py-2 space-x-1">${s.local_only ? `<span class="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300">lokal saja</span>` : `${badge(s.ingress_ok, "ingress", "ingress?")} ${badge(s.dns_ok, "dns", "dns?")}`}</td>
       <td class="whitespace-nowrap px-3 py-2 text-right">
         <button data-act="db" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" data-has="${s.db ? "1" : ""}" class="${BTN_GHOST}">${s.db ? "Reset DB" : "Buat DB"}</button>
         <button data-act="env" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" class="${BTN_GHOST}">.env</button>
@@ -250,10 +253,60 @@ async function loadSites() {
 }
 
 async function loadZones() {
-  const zones = (await api("/api/zones")) || [];
-  $("#f-zone").innerHTML = zones.length
-    ? zones.map((z) => `<option value="${esc(z.id)}">${esc(z.name)}</option>`).join("")
-    : `<option value="">— setup tunnel dulu —</option>`;
+  const res = (await api("/api/zones")) || {};
+  const zones = res.zones || [];
+  const sel = $("#f-zone");
+  sel.innerHTML = zones.length
+    ? `<option value="">— lokal saja (tanpa domain) —</option>` +
+      zones.map((z) => `<option value="${esc(z.id)}">${esc(z.name)}</option>`).join("")
+    : `<option value="">— setup tunnel dulu, atau centang "Lokal saja" —</option>`;
+  // Ingat zone terakhir: mengelola 12 zone berarti memilih ulang tiap kali.
+  if (res.last_zone_id && zones.some((z) => z.id === res.last_zone_id)) sel.value = res.last_zone_id;
+  syncZoneUI();
+}
+
+// syncZoneUI: site lokal-saja tidak butuh zone, dan sebaliknya zone wajib kalau
+// tidak lokal-saja. Tanpa ini, submit gagal di server dengan pesan yang tidak
+// kelihatan sebabnya di form.
+function syncZoneUI() {
+  const local = $("#f-local").checked;
+  $("#f-zone").disabled = local;
+  $("#f-zone").required = !local;
+  if (local) $("#f-zone").value = "";
+}
+
+async function loadScan() {
+  let list = [];
+  try { list = (await api("/api/sites/scan", { quiet: true })) || []; } catch { list = []; }
+  const sec = $("#scan-section");
+  if (!list.length) { sec.classList.add("hidden"); return; }
+  sec.classList.remove("hidden");
+  $("#scan-list").innerHTML = list.map((f) => `
+    <li class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+      <span class="font-mono text-sm text-slate-200">${esc(f.name)}</span>
+      ${f.has_app ? "" : `<span class="rounded bg-amber-900/50 px-1.5 py-0.5 text-xs text-amber-300">belum ada index</span>`}
+      <span class="text-xs text-slate-500">${esc(f.type)}</span>
+      <span class="ml-auto font-mono text-xs text-slate-600">${esc(f.root)}</span>
+      <button data-reg="${esc(f.name)}" data-root="${esc(f.root)}" data-sub="${esc(f.sub)}" data-type="${esc(f.type)}"
+        class="${BTN_GHOST}">Daftarkan</button>
+    </li>`).join("");
+}
+
+// registerFolder: isi form dari folder hasil scan — tidak langsung submit.
+// Folder yang muncul di scan belum tentu siap dilayani, dan zone tetap harus
+// dipilih sadar oleh pengguna.
+function registerFolder(e) {
+  const b = e.target.closest("button[data-reg]");
+  if (!b) return;
+  $("#f-sub").value = b.dataset.sub;
+  $("#f-root").value = b.dataset.root;
+  $("#f-root").dataset.touched = "1";
+  $("#f-type").value = b.dataset.type;
+  $("#f-local").checked = false;
+  syncZoneUI();
+  $("#f-sub").focus();
+  $("#site-form").scrollIntoView({ behavior: "smooth", block: "center" });
+  toast(`Form diisi dari folder ${b.dataset.reg} — pilih zone lalu Tambah Site`);
 }
 
 async function rowAction(e) {
@@ -263,7 +316,7 @@ async function rowAction(e) {
     if (!confirm(`Hapus site ${b.dataset.host}? Vhost, hosts, DNS & ingress ikut dihapus; folder tidak.`)) return;
     await api(`/api/sites/${encodeURIComponent(b.dataset.id)}`, { method: "DELETE" });
     toast("Site dihapus");
-    await loadSites();
+    await Promise.all([loadSites(), loadScan()]);
   } else if (b.dataset.act === "db") {
     const has = b.dataset.has === "1";
     const msg = has
@@ -313,16 +366,17 @@ async function addSite(e) {
     root: $("#f-root").value.trim(),
     type: $("#f-type").value,
     php: $("#f-php").value,
+    local_only: $("#f-local").checked,
   };
   const s = await api("/api/sites", { method: "POST", body });
-  toast(`Site ${s.hostname} dibuat`);
+  toast(s.local_only ? `Site ${s.hostname} dibuat (lokal saja)` : `Site ${s.hostname} dibuat`);
   if ($("#f-db").checked) {
     const s2 = await api("/api/dbs", { method: "POST", body: { site_id: s.id } });
     if (s2.db) toast(`DB ${s2.db.name} (${s2.db.user}) dibuat — kredensial ada di tabel`);
   }
   e.target.reset();
   delete $("#f-root").dataset.touched;
-  await loadSites();
+  await Promise.all([loadSites(), loadScan(), loadZones()]);
 }
 
 async function initSites() {
@@ -337,7 +391,9 @@ async function initSites() {
     if (!r.dataset.touched) r.value = "sites/" + $("#f-sub").value.trim().toLowerCase();
   });
   $("#f-root").addEventListener("input", () => { $("#f-root").dataset.touched = "1"; });
-  await Promise.all([loadSites(), loadZones(), fillPHP()]);
+  $("#f-local").addEventListener("change", syncZoneUI);
+  $("#scan-list").addEventListener("click", registerFolder);
+  await Promise.all([loadSites(), loadZones(), fillPHP(), loadScan()]);
 }
 
 async function fillPHP() {

@@ -43,10 +43,17 @@ type Manager struct {
 	Run       Runner
 	CF        Cloudflare // boleh nil → site lokal saja (tunnel belum setup)
 	HostsPath string     // kosong → skip update hosts (unit test)
+	// SitesDir: folder yang dipindai Scan() untuk menemukan folder belum
+	// terdaftar. Kosong → <StackRoot>/sites.
+	SitesDir string
 }
 
 type AddParams struct {
 	Subdomain, ZoneID, Root, Type, PHP string // Type: php|laravel; Root boleh folder existing
+	// LocalOnly: lewati ingress tunnel + CNAME sepenuhnya. Cukup vhost + hosts
+	// sehingga site hanya hidup di <sub>.test. Berguna untuk eksperimen cepat;
+	// menghindari menyentuh domain publik hanya untuk mencoba sesuatu.
+	LocalOnly bool
 }
 
 func (m *Manager) Add(p AddParams) (state.Site, error) {
@@ -62,14 +69,28 @@ func (m *Manager) Add(p AddParams) (state.Site, error) {
 	if err := validRoot(p.Root); err != nil {
 		return state.Site{}, err
 	}
-	zone, ok := zoneByID(m.St, p.ZoneID)
-	if !ok {
-		return state.Site{}, fmt.Errorf("zone %q tidak ditemukan", p.ZoneID)
+	// Zone opsional untuk site lokal-saja: tanpa zone, hostname publik tidak
+	// ada gunanya, jadi site hidup di <sub>.test saja. Kalau zone diisi
+	// (walau lokal-saja), hostname publik tetap dicatat dan ikut masuk
+	// server_name nginx — supaya mempublikasikannya nanti cukup dengan
+	// menyambung DNS, tanpa daftar ulang.
+	var zoneName string
+	if p.ZoneID != "" {
+		z, ok := zoneByID(m.St, p.ZoneID)
+		if !ok {
+			return state.Site{}, fmt.Errorf("zone %q tidak ditemukan", p.ZoneID)
+		}
+		zoneName = z.Name
+	} else if !p.LocalOnly {
+		return state.Site{}, fmt.Errorf("zone wajib dipilih (atau centang \"lokal saja\")")
 	}
 	// Tolak hostname duplikat SEBELUM menyentuh disk: nama file vhost adalah
 	// <hostname>.conf, jadi dua site berhostname sama akan saling menimpa dan
 	// menghapus vhost salah satunya saat salah satu di-remove.
-	hostname := p.Subdomain + "." + zone.Name
+	hostname := p.Subdomain + ".test"
+	if zoneName != "" {
+		hostname = p.Subdomain + "." + zoneName
+	}
 	if _, exists := m.St.SiteByHostname(hostname); exists {
 		return state.Site{}, fmt.Errorf("site %s sudah ada", hostname)
 	}
@@ -82,6 +103,7 @@ func (m *Manager) Add(p AddParams) (state.Site, error) {
 		Docroot:   Docroot(root, p.Type),
 		Type:      p.Type,
 		PHP:       p.PHP,
+		LocalOnly: p.LocalOnly,
 	}
 	if err := os.MkdirAll(s.Docroot, 0o755); err != nil {
 		return state.Site{}, err
@@ -114,7 +136,7 @@ func (m *Manager) Add(p AddParams) (state.Site, error) {
 			return state.Site{}, fmt.Errorf("hosts: %w", err)
 		}
 	}
-	if cf := m.cfFor(); cf != nil {
+	if cf := m.cfFor(); cf != nil && !p.LocalOnly {
 		if err := cf.UpsertIngress(s.Hostname, ingressService); err != nil {
 			rollback()
 			return state.Site{}, err
@@ -128,13 +150,16 @@ func (m *Manager) Add(p AddParams) (state.Site, error) {
 		s.DNSRecordID, s.IngressOK, s.DNSOK = rec, true, true
 	}
 	if err := m.Run.Reload(); err != nil {
-		if cf := m.cfFor(); cf != nil {
+		if cf := m.cfFor(); cf != nil && !p.LocalOnly {
 			cf.DeleteIngress(s.Hostname)
 		}
 		rollback()
 		return state.Site{}, err
 	}
 	m.St.AddSite(s)
+	if p.ZoneID != "" {
+		m.St.LastZoneID = p.ZoneID
+	}
 	return m.St.Sites[len(m.St.Sites)-1], m.St.Save(m.StatePath)
 }
 
@@ -230,6 +255,21 @@ func Docroot(root, typ string) string {
 	return root
 }
 
+// ServerNames mengembalikan daftar server_name nginx untuk sebuah site.
+//
+// Dipakai bersama oleh sites.Manager (saat add/remove) dan writeNginxConf di
+// main.go (saat boot). Sebelumnya keduanya menulis daftar ini sendiri-sendiri
+// dan sempat berbeda: versi boot tidak tahu soal site lokal-saja, sehingga
+// hostname-nya digandakan jadi <sub>.test.test.
+//
+// Site lokal-saja hostname-nya sudah <sub>.test, jadi tidak perlu ditambah lagi.
+func ServerNames(s state.Site) []string {
+	if strings.EqualFold(s.Hostname, s.Subdomain+".test") {
+		return []string{s.Hostname}
+	}
+	return []string{s.Hostname, s.Subdomain + ".test"}
+}
+
 func (m *Manager) writeVhost(s state.Site) (string, error) {
 	sitesDir := filepath.Join(m.StackRoot, "nginx", "conf", "sites.d")
 	logsDir := filepath.Join(m.StackRoot, "pawon-data", "logs", "nginx")
@@ -240,7 +280,7 @@ func (m *Manager) writeVhost(s state.Site) (string, error) {
 		return "", err
 	}
 	v := nginx.Vhost{
-		ServerNames: []string{s.Hostname, s.Subdomain + ".test"},
+		ServerNames: ServerNames(s),
 		Docroot:     s.Docroot,
 		Pool:        php.PoolName(s.PHP),
 		AccessLog:   filepath.ToSlash(filepath.Join(logsDir, s.Hostname+"-access.log")),
@@ -257,4 +297,123 @@ func zoneByID(c *state.Config, id string) (state.Zone, bool) {
 		}
 	}
 	return state.Zone{}, false
+}
+
+// Unregistered adalah satu folder di SitesDir yang belum terdaftar sebagai site.
+type Unregistered struct {
+	Name   string `json:"name"`    // nama folder, dipakai sebagai usulan subdomain
+	Root   string `json:"root"`    // path absolut siap kirim ke POST /api/sites
+	Sub    string `json:"sub"`     // usulan subdomain (sudah disanitasi)
+	Type   string `json:"type"`    // usulan tipe: laravel kalau ada artisan, selain itu php
+	HasApp bool   `json:"has_app"` // ada index.php/index.html langsung di root
+}
+
+// Scan memindai SitesDir dan mengembalikan folder yang belum terdaftar sebagai
+// site. Read-only: tidak menyentuh disk, tidak memanggil Cloudflare.
+//
+// Ini sengaja BUKAN auto-register. Folder yang muncul di sini belum dilayani
+// nginx dan belum ada di hosts, jadi menaruh folder (termasuk yang berisi
+// .env atau dump DB) tidak pernah dengan sendirinya menerbitkannya ke domain
+// publik. Pendaftaran tetap satu klik sadar oleh pengguna.
+func (m *Manager) Scan() ([]Unregistered, error) {
+	dir := m.SitesDir
+	if dir == "" {
+		dir = filepath.Join(m.StackRoot, "sites")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Unregistered{}, nil
+		}
+		return nil, err
+	}
+	known := make(map[string]bool, len(m.St.Sites))
+	for _, s := range m.St.Sites {
+		// Bandingkan dalam bentuk slash + huruf kecil: state menyimpan path
+		// yang ditulis pengguna ("C:/Pawon/sites/app"), sedangkan ReadDir
+		// mengembalikan bentuk OS ("C:\Pawon\sites\app").
+		known[pathKey(s.Root)] = true
+	}
+	out := []Unregistered{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		root := filepath.Join(dir, e.Name())
+		if known[pathKey(root)] {
+			continue
+		}
+		sub := sanitizeSub(e.Name())
+		if sub == "" {
+			continue // nama folder tidak bisa jadi subdomain yang valid
+		}
+		out = append(out, Unregistered{
+			Name:   e.Name(),
+			Root:   filepath.ToSlash(root),
+			Sub:    sub,
+			Type:   suggestType(root),
+			HasApp: hasEntrypoint(root),
+		})
+	}
+	return out, nil
+}
+
+// pathKey menormalkan path untuk perbandingan: absolut, slash, huruf kecil.
+// Windows case-insensitive, jadi "C:/Pawon/sites/App" dan ".../app" itu sama.
+func pathKey(p string) string {
+	abs, err := filepath.Abs(filepath.FromSlash(p))
+	if err != nil {
+		abs = p
+	}
+	return strings.ToLower(filepath.ToSlash(abs))
+}
+
+// sanitizeSub menyaring nama folder jadi subdomain yang lolos subRe. Nama
+// folder sering memakai huruf besar, spasi, atau garis bawah — semuanya tidak
+// valid sebagai label DNS. Mengembalikan "" kalau tidak ada sisa yang berguna.
+func sanitizeSub(name string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			// Spasi, "_", "." dan simbol lain jadi satu "-" tunggal.
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	// Label DNS maksimal 63 karakter dan tidak boleh diakhiri "-".
+	if len(s) > 63 {
+		s = strings.Trim(s[:63], "-")
+	}
+	if !subRe.MatchString(s) {
+		return ""
+	}
+	return s
+}
+
+// suggestType: folder dengan artisan dianggap Laravel, karena docroot-nya
+// harus <root>/public. Deteksi ini cuma usulan — pengguna tetap bisa ubah.
+func suggestType(root string) string {
+	if fi, err := os.Stat(filepath.Join(root, "artisan")); err == nil && !fi.IsDir() {
+		return "laravel"
+	}
+	return "php"
+}
+
+// hasEntrypoint: apakah folder punya index.php/index.html langsung di root.
+// Dipakai UI untuk menandai folder yang isinya belum siap dilayani.
+func hasEntrypoint(root string) bool {
+	for _, f := range []string{"index.php", "index.html"} {
+		if fi, err := os.Stat(filepath.Join(root, f)); err == nil && !fi.IsDir() {
+			return true
+		}
+	}
+	return false
 }

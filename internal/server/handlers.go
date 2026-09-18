@@ -88,6 +88,21 @@ func (h handlers) sitesList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.St.Sites)
 }
 
+// sitesScan melaporkan folder di <root>/sites yang belum terdaftar sebagai
+// site. Read-only — tidak ada efek samping, jadi aman dipanggil sesering apa pun.
+func (h handlers) sitesScan(w http.ResponseWriter, r *http.Request) {
+	if h.Sites == nil {
+		writeErr(w, http.StatusInternalServerError, "sites manager tidak tersedia")
+		return
+	}
+	list, err := h.Sites.Scan()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "scan: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 func (h handlers) sitesAdd(w http.ResponseWriter, r *http.Request) {
 	var p struct {
 		Subdomain string `json:"subdomain"`
@@ -95,6 +110,7 @@ func (h handlers) sitesAdd(w http.ResponseWriter, r *http.Request) {
 		Root      string `json:"root"`
 		Type      string `json:"type"`
 		PHP       string `json:"php"`
+		LocalOnly bool   `json:"local_only"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		writeErr(w, http.StatusBadRequest, "body: %v", err)
@@ -104,7 +120,14 @@ func (h handlers) sitesAdd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "sites manager tidak tersedia")
 		return
 	}
-	s, err := h.Sites.Add(sites.AddParams(p))
+	s, err := h.Sites.Add(sites.AddParams{
+		Subdomain: p.Subdomain,
+		ZoneID:    p.ZoneID,
+		Root:      p.Root,
+		Type:      p.Type,
+		PHP:       p.PHP,
+		LocalOnly: p.LocalOnly,
+	})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "%v", err)
 		return
@@ -125,12 +148,17 @@ func (h handlers) sitesDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// zones: daftar zone + zone terakhir yang dipakai. Digabung dalam satu respons
+// supaya UI tidak perlu endpoint terpisah hanya untuk prefill dropdown.
 func (h handlers) zones(w http.ResponseWriter, r *http.Request) {
-	if h.St.Cloudflare.Zones == nil {
-		writeJSON(w, http.StatusOK, []state.Zone{})
-		return
+	zs := h.St.Cloudflare.Zones
+	if zs == nil {
+		zs = []state.Zone{}
 	}
-	writeJSON(w, http.StatusOK, h.St.Cloudflare.Zones)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"zones":        zs,
+		"last_zone_id": h.St.LastZoneID,
+	})
 }
 
 func (h handlers) tunnelSetup(w http.ResponseWriter, r *http.Request) {
