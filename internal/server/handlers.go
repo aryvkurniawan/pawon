@@ -118,7 +118,7 @@ func (h handlers) sitesDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "site %q tidak ditemukan", id)
 		return
 	}
-	if err := h.Sites.Remove(id, h.Sites.CF); err != nil {
+	if err := h.Sites.Remove(id, h.Sites.CFFor()); err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

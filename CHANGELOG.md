@@ -2,6 +2,28 @@
 
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi mengikuti [SemVer](https://semver.org/lang/id/).
 
+## [Unreleased]
+
+Perbaikan enam bug yang dilaporkan di issue #1–#6 + multi-PHP 8.1–8.4.
+
+### Ditambahkan
+- Multi-PHP: pin PHP 8.1.34, 8.2.33, 8.3.33, 8.4.25 (NTS x64) dengan port pool kanonik 9100/9200/9300/9400. Tiap seri punya folder + php.ini sendiri.
+- Tombol **Buat DB** / **Reset DB** per site di halaman Sites (sebelumnya hanya saat create site).
+- Panel menulis `pawon-data/logs/pawon.log` — sebelumnya menu "Panel (pawon.log)" di log viewer selalu 404.
+- Validasi header `Host` (hanya `127.0.0.1:7080` / `localhost:7080`) + wajib `Content-Type: application/json` untuk endpoint mutasi.
+- Validasi input `php` (harus versi terpasang & aktif), `type` (php|laravel), dan `root` (absolut, tanpa karakter yang bisa memutus quoting config nginx).
+- Unit test untuk `versions` (port & URL pin), `seed` kanonik, `ensurePhpIni`, `panelLog`, guard Host/Content-Type, rollback `Add`, retry `writeAtomic`, dan idempotensi statement DB.
+
+### Diperbaiki
+- **#1** Add site yang gagal setelah validate meninggalkan vhost orphan yang sudah aktif di nginx (nginx ter-reload sebelum langkah hosts). Urutan diubah: vhost → validate → hosts → CF → reload → save, dengan rollback berurutan terbalik.
+- **#2** `hosts.Add` gagal non-deterministik sebagai LocalSystem — rename tepat setelah write kalah race dengan filter driver/AV. Kini retry dengan backoff + fallback tulis langsung.
+- **#3** "Buat database" dua kali menyimpan password baru di state sementara MariaDB masih memakai yang lama. Ditambah `ALTER USER ... IDENTIFIED BY`.
+- **#4** Subdomain duplikat pada zone sama membuat vhost saling menimpa dan site kedua kehilangan vhost saat yang pertama dihapus. Hostname duplikat kini ditolak.
+- **#5** Panel tanpa validasi `Host` rentan DNS rebinding (bind loopback tidak menutupnya).
+- **#6** `php`/`root` dari request masuk mentah ke config nginx; injeksi terbukti lolos `nginx -t` di level renderer.
+- php.ini per versi kini hanya memuat extension yang DLL-nya ada — `zip` di PHP 8.1 built-in, dan menulis `extension=zip` memunculkan warning tiap request.
+- Adapter Cloudflare selalu terpasang, jadi setup tunnel dari UI langsung berlaku untuk site berikutnya tanpa restart panel.
+
 ## [0.1.1] - 2026-09-04
 
 Fix dari smoke end-to-end pertama (semua komponen lokal terverifikasi: first-run download, add/remove site, PHP via FastCGI, Laravel + composer, phpMyAdmin, supervisor).

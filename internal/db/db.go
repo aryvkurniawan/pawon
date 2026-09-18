@@ -32,11 +32,19 @@ func GenRootPassword() string {
 }
 
 // Statements pure: CREATE DATABASE/USER/GRANT; quote `'` di-escape.
+//
+// ALTER USER wajib ada: `CREATE USER IF NOT EXISTS ... IDENTIFIED BY` TIDAK
+// mengubah password kalau user-nya sudah ada. Tanpa ALTER, pemanggilan kedua
+// (mis. klik "Buat database" dua kali) menyimpan password baru di state
+// sementara MariaDB masih memakai password lama — panel menampilkan kredensial
+// yang sudah tidak berlaku dan .env Laravel gagal konek tanpa petunjuk.
 func Statements(name, user, pass string) []string {
 	return []string{
 		fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", name),
 		fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s'", esc(user), esc(pass)),
+		fmt.Sprintf("ALTER USER '%s'@'localhost' IDENTIFIED BY '%s'", esc(user), esc(pass)),
 		fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost'", name, esc(user)),
+		fmt.Sprintf("FLUSH PRIVILEGES"),
 	}
 }
 
