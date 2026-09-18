@@ -170,6 +170,7 @@ async function loadSites() {
       <td class="px-3 py-2">${s.db ? `<span class="text-emerald-400">${esc(s.db.name)}</span> <span class="text-xs text-slate-500">${esc(s.db.user)}</span>` : `<span class="text-xs text-slate-500">tanpa DB</span>`}</td>
       <td class="px-3 py-2 space-x-1">${badge(s.ingress_ok, "ingress", "ingress?")} ${badge(s.dns_ok, "dns", "dns?")}</td>
       <td class="whitespace-nowrap px-3 py-2 text-right">
+        <button data-act="db" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" data-has="${s.db ? "1" : ""}" class="${BTN_GHOST}">${s.db ? "Reset DB" : "Buat DB"}</button>
         <button data-act="env" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" class="${BTN_GHOST}">.env</button>
         <button data-act="del" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" class="${BTN_DANGER}">Hapus</button>
       </td>
@@ -190,6 +191,15 @@ async function rowAction(e) {
     if (!confirm(`Hapus site ${b.dataset.host}? Vhost, hosts, DNS & ingress ikut dihapus; folder tidak.`)) return;
     await api(`/api/sites/${encodeURIComponent(b.dataset.id)}`, { method: "DELETE" });
     toast("Site dihapus");
+    await loadSites();
+  } else if (b.dataset.act === "db") {
+    const has = b.dataset.has === "1";
+    const msg = has
+      ? `Reset password database ${b.dataset.host}? Password lama tidak berlaku lagi; perbarui .env site ini.`
+      : `Buat database untuk ${b.dataset.host}? Kredensial akan ditampilkan di tabel.`;
+    if (!confirm(msg)) return;
+    const s = await api("/api/dbs", { method: "POST", body: { site_id: b.dataset.id } });
+    toast(`DB ${s.db.name} (${s.db.user}) siap — kredensial ada di tabel`);
     await loadSites();
   } else if (b.dataset.act === "env") {
     await openEnv(b.dataset.id, b.dataset.host);
@@ -284,7 +294,7 @@ async function refreshTunnel() {
 async function setupTunnel(e) {
   e.preventDefault();
   await api("/api/tunnel/setup", { method: "POST", body: { api_token: $("#t-token").value.trim() } });
-  toast("Tunnel di-setup");
+  toast("Tunnel di-setup — site berikutnya otomatis ter-wire ke ingress");
   $("#t-token").value = "";
   await refreshTunnel();
 }

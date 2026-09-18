@@ -53,15 +53,31 @@ func (m *Manager) Add(p AddParams) (state.Site, error) {
 	if !subRe.MatchString(p.Subdomain) {
 		return state.Site{}, fmt.Errorf("subdomain tidak valid: %q", p.Subdomain)
 	}
+	if p.Type != "php" && p.Type != "laravel" {
+		return state.Site{}, fmt.Errorf("tipe tidak dikenal: %q (pakai php|laravel)", p.Type)
+	}
+	if err := validPHP(m.St, p.PHP); err != nil {
+		return state.Site{}, err
+	}
+	if err := validRoot(p.Root); err != nil {
+		return state.Site{}, err
+	}
 	zone, ok := zoneByID(m.St, p.ZoneID)
 	if !ok {
 		return state.Site{}, fmt.Errorf("zone %q tidak ditemukan", p.ZoneID)
+	}
+	// Tolak hostname duplikat SEBELUM menyentuh disk: nama file vhost adalah
+	// <hostname>.conf, jadi dua site berhostname sama akan saling menimpa dan
+	// menghapus vhost salah satunya saat salah satu di-remove.
+	hostname := p.Subdomain + "." + zone.Name
+	if _, exists := m.St.SiteByHostname(hostname); exists {
+		return state.Site{}, fmt.Errorf("site %s sudah ada", hostname)
 	}
 	root := filepath.ToSlash(p.Root)
 	s := state.Site{
 		Subdomain: p.Subdomain,
 		ZoneID:    p.ZoneID,
-		Hostname:  p.Subdomain + "." + zone.Name,
+		Hostname:  hostname,
 		Root:      root,
 		Docroot:   Docroot(root, p.Type),
 		Type:      p.Type,
@@ -70,37 +86,104 @@ func (m *Manager) Add(p AddParams) (state.Site, error) {
 	if err := os.MkdirAll(s.Docroot, 0o755); err != nil {
 		return state.Site{}, err
 	}
+
+	// Urutan: vhost → validate → hosts → CF → reload → save.
+	//
+	// Reload sengaja DITUNDA sampai semua langkah non-nginx selesai. Vhost yang
+	// belum di-reload tidak dilayani nginx, jadi kalau langkah berikutnya gagal
+	// kita cukup menghapus filenya — tidak ada hostname "hantu" yang hidup tanpa
+	// terdaftar di state. Rollback dilakukan berurutan terbalik.
 	conf, err := m.writeVhost(s)
 	if err != nil {
 		return state.Site{}, err
 	}
 	s.NginxConf = conf
-	if err := m.Run.Validate(); err != nil {
+	rollback := func() {
 		os.Remove(conf)
-		return state.Site{}, err
+		if m.HostsPath != "" {
+			hosts.Remove(m.HostsPath, s.Subdomain+".test")
+		}
 	}
-	if err := m.Run.Reload(); err != nil {
-		os.Remove(conf)
+	if err := m.Run.Validate(); err != nil {
+		rollback()
 		return state.Site{}, err
 	}
 	if m.HostsPath != "" {
 		if err := hosts.Add(m.HostsPath, s.Subdomain+".test"); err != nil {
-			return state.Site{}, err
+			rollback()
+			return state.Site{}, fmt.Errorf("hosts: %w", err)
 		}
 	}
-	if m.CF != nil {
-		if err := m.CF.UpsertIngress(s.Hostname, ingressService); err != nil {
+	if cf := m.cfFor(); cf != nil {
+		if err := cf.UpsertIngress(s.Hostname, ingressService); err != nil {
+			rollback()
 			return state.Site{}, err
 		}
-		rec, err := m.CF.UpsertCNAME(s.ZoneID, s.Subdomain, m.St.Cloudflare.TunnelID)
+		rec, err := cf.UpsertCNAME(s.ZoneID, s.Subdomain, m.St.Cloudflare.TunnelID)
 		if err != nil {
+			cf.DeleteIngress(s.Hostname)
+			rollback()
 			return state.Site{}, err
 		}
 		s.DNSRecordID, s.IngressOK, s.DNSOK = rec, true, true
 	}
+	if err := m.Run.Reload(); err != nil {
+		if cf := m.cfFor(); cf != nil {
+			cf.DeleteIngress(s.Hostname)
+		}
+		rollback()
+		return state.Site{}, err
+	}
 	m.St.AddSite(s)
 	return m.St.Sites[len(m.St.Sites)-1], m.St.Save(m.StatePath)
 }
+
+// validPHP: versi harus ada di daftar versi terpasang dan aktif. Tanpa ini,
+// nilai sembarang dari request masuk ke nama upstream nginx dan config-nya
+// ditolak saat `nginx -t` — pesan errornya membingungkan dan vhost sudah
+// terlanjur ditulis.
+func validPHP(st *state.Config, version string) error {
+	for _, v := range st.PHPVersions {
+		if v.Version == version {
+			if !v.Enabled {
+				return fmt.Errorf("PHP %s tidak aktif", version)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("PHP %q tidak terpasang", version)
+}
+
+// validRoot: tolak karakter yang bisa memutus quoting di config nginx.
+// Nilai ini diinterpolasi ke dalam `root "..."`, jadi kutip ganda, newline,
+// dan titik-koma bisa menyuntik direktif baru.
+func validRoot(root string) error {
+	if strings.TrimSpace(root) == "" {
+		return fmt.Errorf("folder root wajib diisi")
+	}
+	if strings.ContainsAny(root, "\"';{}\n\r\t") {
+		return fmt.Errorf("folder root mengandung karakter terlarang: %q", root)
+	}
+	if !filepath.IsAbs(filepath.FromSlash(root)) {
+		return fmt.Errorf("folder root harus path absolut: %q", root)
+	}
+	return nil
+}
+
+// cfFor: adapter CF hanya dipakai kalau tunnel sudah benar-benar di-setup.
+// Adapter selalu terpasang (supaya setup dari UI langsung berlaku tanpa
+// restart panel), jadi gerbangnya pindah ke sini — tanpa TunnelID,
+// UpsertIngress/UpsertCNAME akan menembak CF dengan kredensial kosong.
+func (m *Manager) cfFor() Cloudflare {
+	if m.CF == nil || m.St.Cloudflare.TunnelID == "" {
+		return nil
+	}
+	return m.CF
+}
+
+// CFFor mengekspos cfFor ke handler (Remove menerima Cloudflare sebagai
+// parameter agar tetap bisa diuji dengan mock).
+func (m *Manager) CFFor() Cloudflare { return m.cfFor() }
 
 // Remove kebalikan Add: CF delete → hosts remove → vhost hapus + reload →
 // state remove + save. cf boleh nil (site lokal).

@@ -15,6 +15,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	versions "pawon/internal"
 	"pawon/internal/cf"
@@ -96,8 +98,12 @@ func panel(stop chan struct{}) error {
 	mainConf := filepath.Join(root, "nginx", "conf", "main.conf")
 
 	trace := func(stage string) { fmt.Fprintln(os.Stderr, "pawon: "+stage) }
+	logf, closeLog := panelLog(filepath.Join(logsDir, "pawon.log"))
+	defer closeLog()
+	logf("panel mulai (root=%s)", root)
 	st, err := state.Load(statePath)
 	if err != nil {
+		logf("state gagal dimuat: %v", err)
 		return err
 	}
 	trace("state dimuat")
@@ -188,12 +194,11 @@ func panel(stop chan struct{}) error {
 		St: &st, StatePath: statePath, API: api, Sup: sup,
 		CloudflaredExe: filepath.Join(root, "bin", "cloudflared.exe"),
 	}
-	// Adapter CF hanya saat tunnel sudah di-setup; sebelum itu site lokal saja
-	// (lihat komentar CFAdapter di server). Setup via UI → restart panel.
-	var cfAdapter sites.Cloudflare
-	if st.Cloudflare.TunnelID != "" {
-		cfAdapter = server.NewCFAdapter(api, &st)
-	}
+	// Adapter CF selalu terpasang; pemakaiannya digerbang per-operasi oleh
+	// sites.Manager lewat cfFor(). Sebelumnya adapter hanya dibuat saat boot
+	// bila tunnel sudah di-setup, sehingga setup tunnel dari UI baru berlaku
+	// setelah panel di-restart — site berikutnya tidak ter-wire ke ingress.
+	cfAdapter := sites.Cloudflare(server.NewCFAdapter(api, &st))
 	sm := &sites.Manager{
 		St: &st, StatePath: statePath, StackRoot: root,
 		Run: nginxRunner{exe: filepath.Join(nginxHome, "nginx.exe"), prefix: prefix(nginxHome), conf: mainConf},
@@ -208,10 +213,13 @@ func panel(stop chan struct{}) error {
 	for _, name := range startOrder(&st) {
 		if err := sup.Start(name); err != nil {
 			fmt.Fprintln(os.Stderr, "pawon: start", name, err)
+			logf("start %s gagal: %v", name, err)
 		}
 	}
+	logf("stack jalan: %d versi PHP, %d site", len(st.PHPVersions), len(st.Sites))
 	if err := tun.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "pawon: start cloudflared:", err)
+		logf("start cloudflared gagal: %v", err)
 	}
 	if freshDB {
 		if err := db.SetRootPassword(mariaHome, st.DB.RootPassword); err != nil {
@@ -249,6 +257,32 @@ func panel(stop chan struct{}) error {
 	}
 }
 
+// panelLog: penulis pawon.log. Sebelumnya panel tidak menulis log apa pun,
+// sehingga menu "Panel (pawon.log)" di log viewer selalu berakhir 404.
+// Menulis ke satu file dengan mutex; gagal buka = logging dimatikan (tidak
+// fatal — log bukan syarat panel jalan). close() menutup file agar handle
+// tidak menggantung (penting saat panel dihentikan & di unit test).
+func panelLog(path string) (logf func(string, ...any), close func()) {
+	noop := func(string, ...any) {}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return noop, func() {}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return noop, func() {}
+	}
+	var mu sync.Mutex
+	return func(format string, a ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, a...))
+		}, func() {
+			mu.Lock()
+			defer mu.Unlock()
+			f.Close()
+		}
+}
+
 // startOrder: nama service yang di-start, mariadb dulu (site butuh DB).
 func startOrder(st *state.Config) []string {
 	names := []string{"mariadb"}
@@ -263,15 +297,39 @@ func startOrder(st *state.Config) []string {
 	return append(names, "nginx")
 }
 
-// seed: state masih kosong → default 1 pool PHP 8.4 + nginx/mariadb enabled
-// (first-run harus langsung hijau tanpa edit manual pawon.json).
+// seed: pastikan daftar versi PHP + service mengikuti PHPSeries (sumber
+// tunggal kebenaran di internal/versions.go). Idempoten: tiap boot versi yang
+// hilang ditambahkan dengan port kanoniknya, dan port versi yang sudah ada
+// dirapikan ke kanonik supaya state tidak pernah desync dari upstream nginx.
 func seed(st *state.Config) {
-	if len(st.PHPVersions) == 0 {
-		st.PHPVersions = []state.PHPVersion{{Version: "8.4", PortBase: 9100, Enabled: true}}
+	canon := make([]state.PHPVersion, 0, len(versions.PHPSeries))
+	for _, v := range versions.PHPSeries {
+		port, _ := versions.PortBaseFor(v.Series)
+		enabled := true
+		if old, ok := findPHP(st.PHPVersions, v.Series); ok {
+			enabled = old.Enabled // hormati pilihan user untuk versi yang sudah ada
+		}
+		canon = append(canon, state.PHPVersion{Version: v.Series, PortBase: port, Enabled: enabled})
 	}
+	st.PHPVersions = canon
+
 	if st.Services == nil {
-		st.Services = map[string]state.ServiceCfg{"nginx": {Enabled: true}, "mariadb": {Enabled: true}}
+		st.Services = map[string]state.ServiceCfg{}
 	}
+	for _, name := range []string{"nginx", "mariadb"} {
+		if _, ok := st.Services[name]; !ok {
+			st.Services[name] = state.ServiceCfg{Enabled: true}
+		}
+	}
+}
+
+func findPHP(list []state.PHPVersion, series string) (state.PHPVersion, bool) {
+	for _, v := range list {
+		if v.Version == series {
+			return v, true
+		}
+	}
+	return state.PHPVersion{}, false
 }
 
 // writeNginxConf: main.conf + vhost per site dari state (sumber kebenaran
@@ -350,16 +408,26 @@ func stackRoot() (string, error) {
 
 // ensurePhpIni: zip PHP tidak membawa php.ini aktif — tulis minimal:
 // extension Laravel + error log per versi (spec §7). Idempoten.
+//
+// Daftar extension dideteksi dari isi ext/ (bukan hardcode): sebagian versi
+// membundel extension ke dalam php.exe sehingga tidak punya php_<x>.dll —
+// mis. zip di PHP 8.1. Menulis "extension=zip" untuk versi itu memunculkan
+// warning "Unable to load dynamic library" tiap request, jadi entri tanpa DLL
+// dilewati; fungsinya tetap tersedia karena sudah built-in.
 func ensurePhpIni(phpHome, logsDir, version string) error {
 	ini := filepath.Join(phpHome, "php.ini")
 	if _, err := os.Stat(ini); err == nil {
 		return nil
 	}
-	ext := []string{"openssl", "pdo_mysql", "mysqli", "pdo_sqlite", "sqlite3", "mbstring", "gd", "zip", "intl", "sodium", "exif", "fileinfo", "curl"}
+	want := []string{"openssl", "pdo_mysql", "mysqli", "pdo_sqlite", "sqlite3", "mbstring", "gd", "zip", "intl", "sodium", "exif", "fileinfo", "curl"}
 	var b strings.Builder
 	fmt.Fprintln(&b, "; pawon: generated — panel tidak menimpa php.ini yang sudah ada")
 	fmt.Fprintln(&b, `extension_dir = "ext"`)
-	for _, e := range ext {
+	for _, e := range want {
+		if !hasExtDLL(phpHome, e) {
+			fmt.Fprintf(&b, "; %s: built-in di versi ini (tanpa php_%s.dll) — tidak dimuat sebagai extension\n", e, e)
+			continue
+		}
 		fmt.Fprintf(&b, "extension=%s\n", e)
 	}
 	fmt.Fprintln(&b, "error_reporting = E_ALL")
@@ -367,6 +435,16 @@ func ensurePhpIni(phpHome, logsDir, version string) error {
 	fmt.Fprintln(&b, "log_errors = On")
 	fmt.Fprintf(&b, "error_log = %s\n", filepath.ToSlash(filepath.Join(logsDir, "php-"+version+".log")))
 	return os.WriteFile(ini, []byte(b.String()), 0o644)
+}
+
+// hasExtDLL melaporkan apakah ext/php_<name>.dll ada di distribusi PHP ini.
+func hasExtDLL(phpHome, name string) bool {
+	for _, cand := range []string{"php_" + name + ".dll", name + ".dll"} {
+		if _, err := os.Stat(filepath.Join(phpHome, "ext", cand)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // wirePMA: phpMyAdmin sebagai site internal pma.test — config auth_type=config

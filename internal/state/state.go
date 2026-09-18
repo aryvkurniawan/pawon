@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -128,6 +129,20 @@ func (c *Config) Site(id string) (Site, bool) {
 	defer mu.Unlock()
 	for _, s := range c.Sites {
 		if s.ID == id {
+			return s, true
+		}
+	}
+	return Site{}, false
+}
+
+// SiteByHostname mencari site berdasarkan hostname. Dipakai sites.Manager
+// untuk menolak hostname duplikat — nama file vhost adalah <hostname>.conf,
+// jadi hostname kembar berarti dua site berebut satu file.
+func (c *Config) SiteByHostname(hostname string) (Site, bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, s := range c.Sites {
+		if strings.EqualFold(s.Hostname, hostname) {
 			return s, true
 		}
 	}

@@ -7,7 +7,7 @@ Panel webserver untuk Windows: **nginx + PHP (multi versi) + MariaDB + Cloudflar
 ## Fitur
 
 - **Panel web** (http://127.0.0.1:7080) — Dashboard status service, Sites, Tunnel, Settings.
-- **Multi-PHP per site** — 1 pool php-cgi per versi (default 8.4), dropdown versi saat nambah site.
+- **Multi-PHP per site** — 4 pool php-cgi (PHP 8.1 / 8.2 / 8.3 / 8.4), dropdown versi saat nambah site. Tiap seri punya folder `bin/php/<ver>/` + php.ini sendiri, jadi site lama bisa tetap di 8.1 sementara site baru pakai 8.4.
 - **Cloudflare Tunnel** — remotely-managed: ingress & DNS diatur via API, tanpa restart cloudflared. Nambah site = tulis vhost + tambah ingress + CNAME, otomatis.
 - **Alias lokal `*.test`** — tiap site bisa dibuka via `<sub>.<domain>` (tunnel) dan `<sub>.test` (lokal, tanpa tunnel).
 - **phpMyAdmin bundel** — auto-site `pma.test`, login sekali-klik (kredensial root dari state).
@@ -65,6 +65,8 @@ pawon/
 ## Keamanan
 
 - Panel bind `127.0.0.1` saja — tidak terekspos jaringan. Akses lan perlu tunnel/reverse-proxy sendiri.
+- Panel juga memvalidasi header `Host` (hanya `127.0.0.1:7080` / `localhost:7080`) dan mewajibkan `Content-Type: application/json` untuk endpoint mutasi. Tanpa keduanya, halaman web yang dikunjungi pengguna bisa memanggil API panel lewat DNS rebinding — bind loopback saja tidak menutup itu.
+- Input `php`, `type`, dan `root` divalidasi sebelum masuk ke config nginx.
 - Token CF & password DB tersimpan plaintext di `pawon-data/pawon.json` (single-user homelab); upgrade path: DPAPI/Credential Manager.
 - phpMyAdmin `pma.test` auto-login memakai kredensial root — hanya reachable lokal.
 
@@ -82,6 +84,7 @@ Dokumen desain: [`docs/superpowers/specs/2026-09-04-pawon-design.md`](docs/super
 ## Status / Catatan
 
 - ✅ Smoke end-to-end terverifikasi: first-run download, 6 service hijau, add/remove site (`*.test` 200 via FastCGI), Laravel via composer (`demo.test` 200), phpMyAdmin auto-login. Belum diverifikasi: setup tunnel (butuh paste token Cloudflare milik pengguna).
+- ✅ Multi-PHP 8.1/8.2/8.3/8.4 terverifikasi: 16 worker php-cgi, tiap versi melayani `PHP_VERSION`-nya sendiri via `<sub>.test`.
 - Fitur tunnel butuh paste token Cloudflare milikmu (tidak ada kredensial di repo).
 - Lihat [CHANGELOG.md](CHANGELOG.md).
 

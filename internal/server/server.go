@@ -27,7 +27,7 @@ type Deps struct {
 	Web        fs.FS // UI embed (web/, di-set main.go); nil → 404
 }
 
-// New membangun mux API (Go 1.22 pattern) + slot static UI.
+// New membangun mux API (Go 1.22 pattern) + slot static UI, dibungkus guard.
 func New(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	h := handlers{d}
@@ -47,7 +47,39 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/dbs", h.dbCreate)
 	mux.HandleFunc("GET /api/logs/{name...}", h.logs)
 	mux.Handle("/", static(d.Web))
-	return mux
+	return guard(mux)
+}
+
+// allowedHosts: hostname panel yang sah. Bind 127.0.0.1 saja TIDAK melindungi
+// dari DNS rebinding — halaman web jahat bisa membuat domainnya resolve ke
+// 127.0.0.1, lalu browser mengirim request ke panel dengan Host milik penyerang
+// dan panel memprosesnya. Karena panel tidak punya autentikasi, header Host
+// adalah satu-satunya pembeda antara "dibuka sendiri" dan "dipanggil diam-diam
+// oleh situs lain", jadi ia wajib diperiksa.
+var allowedHosts = map[string]bool{
+	"127.0.0.1:7080": true,
+	"localhost:7080": true,
+}
+
+// guard menolak request dengan Host asing dan body non-JSON.
+func guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowedHosts[strings.ToLower(r.Host)] {
+			writeErr(w, http.StatusForbidden, "host tidak diizinkan: %q", r.Host)
+			return
+		}
+		// Endpoint mutasi wajib JSON. Ini menutup request lintas-origin yang
+		// lolos tanpa preflight CORS: text/plain & form-urlencoded termasuk
+		// CORS-safelisted, jadi browser mengirimnya tanpa bertanya dulu.
+		if p := r.URL.Path; strings.HasPrefix(p, "/api/") && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+			ct := r.Header.Get("Content-Type")
+			if mt, _, _ := strings.Cut(ct, ";"); strings.TrimSpace(mt) != "application/json" {
+				writeErr(w, http.StatusUnsupportedMediaType, "Content-Type harus application/json, dapat %q", ct)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // static melayani UI dari embed.FS. web/ ada di root repo sedangkan package

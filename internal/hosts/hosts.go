@@ -1,8 +1,10 @@
 package hosts
 
 import (
+	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 const marker = "# pawon"
@@ -62,10 +64,43 @@ func hasHost(line, hostname string) bool {
 	return false
 }
 
+// writeAtomic menulis lewat file sementara lalu rename, dengan retry.
+//
+// Kenapa retry: rename tepat setelah write bisa gagal "Access is denied"
+// ketika panel jalan sebagai service (LocalSystem) — race dengan filter
+// driver/AV yang masih memegang file sementara. Terukur di lapangan: konten
+// identik kadang berhasil kadang tidak, dan jeda beberapa ratus ms cukup
+// membuatnya berhasil. Retry dengan backoff menutup jendela itu.
+//
+// Kalau semua percobaan habis (mis. file terkunci proses lain), fallback
+// terakhir adalah menulis langsung ke target — kehilangan sifat atomik, tapi
+// hosts tetap ter-update, dan itu lebih berguna daripada gagal total.
 func writeAtomic(path, content string) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	delays := []time.Duration{0, 50 * time.Millisecond, 150 * time.Millisecond, 400 * time.Millisecond, time.Second}
+	var lastErr error
+	for _, d := range delays {
+		if d > 0 {
+			time.Sleep(d)
+		}
+		if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+			lastErr = err
+			continue
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	os.Remove(tmp)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		// Laporkan error rename asli — itu penyebab utamanya, dan lebih
+		// informatif daripada error fallback yang cuma akibat turunannya.
+		if lastErr != nil {
+			return fmt.Errorf("%w (fallback tulis langsung juga gagal: %v)", lastErr, err)
+		}
 		return err
 	}
-	return os.Rename(tmp, path)
+	return nil
 }
