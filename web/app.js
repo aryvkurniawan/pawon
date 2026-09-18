@@ -143,7 +143,7 @@ async function refreshStatus() {
   $("#sum-sites").textContent = s.sites ?? 0;
   const t = s.tunnel;
   $("#sum-tunnel").innerHTML = t
-    ? badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections} koneksi`, `${esc(t.Status)} · ${t.Connections} koneksi`)
+    ? badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`, `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`)
     : s.err
       ? `<span class="text-xs text-red-400">${esc(s.err)}</span>`
       : badge(false, "", "belum di-setup");
@@ -355,7 +355,7 @@ async function refreshTunnel() {
     const t = await api("/api/tunnel/status", { quiet: true });
     box.innerHTML = `
       <div class="flex flex-wrap items-center gap-3">
-        ${badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections} koneksi`, `${esc(t.Status)} · ${t.Connections} koneksi`)}
+        ${badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`, `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`)}
         <span class="text-slate-300">Tunnel <b class="text-white">${esc(t.Name)}</b></span>
         <span class="font-mono text-xs text-slate-500">${esc(t.ID)}</span>
       </div>`;

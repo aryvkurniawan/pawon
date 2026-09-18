@@ -42,7 +42,10 @@ type Manager struct {
 	API            API
 	Sup            *proc.Supervisor
 	CloudflaredExe string
-	mu             sync.Mutex // serialisasi mutasi ingress (GET-modify-PUT)
+	// NewAPI membangun klien CF dari token yang baru dipaste. Dipakai Setup
+	// supaya token dari UI langsung berlaku tanpa menunggu restart panel.
+	NewAPI func(token string) API
+	mu     sync.Mutex // serialisasi mutasi ingress (GET-modify-PUT)
 }
 
 // Setup exchanges an API token for a dedicated tunnel: resolve the first
@@ -52,7 +55,21 @@ type Manager struct {
 func (m *Manager) Setup(token string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	accts, err := m.API.Accounts()
+	// Pakai token yang baru dipaste, bukan m.API yang di-wire saat boot.
+	//
+	// m.API dibuat di main.go dengan cf.New(st.Cloudflare.APIToken) — pada
+	// instalasi baru itu string kosong, karena token belum ada. Tanpa cabang
+	// ini, Setup selalu menembak Cloudflare tanpa kredensial dan gagal
+	// "Invalid request headers", sehingga setup dari UI tidak pernah bisa
+	// berhasil sampai panel di-restart (dan restart pun tetap kosong).
+	api := m.API
+	if token != "" {
+		if m.NewAPI == nil {
+			return errors.New("CF: tidak ada factory API untuk token baru")
+		}
+		api = m.NewAPI(token)
+	}
+	accts, err := api.Accounts()
 	if err != nil {
 		return err
 	}
@@ -60,25 +77,28 @@ func (m *Manager) Setup(token string) error {
 		return errors.New("CF: token ini tidak punya account")
 	}
 	acc := accts[0].ID
-	zones, err := m.API.Zones()
+	zones, err := api.Zones()
 	if err != nil {
 		return err
 	}
-	t, err := m.API.CreateTunnel(acc, tunnelName)
+	t, err := api.CreateTunnel(acc, tunnelName)
 	if err != nil {
 		return err
 	}
-	tok, err := m.API.TunnelToken(acc, t.ID)
+	tok, err := api.TunnelToken(acc, t.ID)
 	if err != nil {
 		return err
 	}
-	cfg, err := m.API.GetConfig(acc, t.ID)
+	cfg, err := api.GetConfig(acc, t.ID)
 	if err != nil {
 		return err
 	}
-	if err := m.API.PutConfig(acc, t.ID, ensureCatchAll(cfg)); err != nil {
+	if err := api.PutConfig(acc, t.ID, ensureCatchAll(cfg)); err != nil {
 		return err
 	}
+	// Simpan hanya setelah semua langkah CF berhasil, supaya state tidak
+	// menyimpan token setengah jadi kalau setup gagal di tengah.
+	m.API = api
 	m.St.Cloudflare.APIToken = token
 	m.St.Cloudflare.AccountID = acc
 	m.St.Cloudflare.TunnelID = t.ID

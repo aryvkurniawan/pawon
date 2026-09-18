@@ -47,7 +47,7 @@ func RenderVhost(v Vhost) string {
 func RenderMain(ups []Upstream, stackRoot string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "worker_processes  1;\n\nerror_log  \"%s\";\n\n", path.Join(stackRoot, "pawon-data", "logs", "nginx-error.log"))
-	b.WriteString("events {\n    worker_connections  1024;\n}\n\nhttp {\n    include       mime.types;\n    default_type  application/octet-stream;\n    sendfile      on;\n\n")
+	b.WriteString("events {\n    worker_connections  1024;\n}\n\nhttp {\n    include       mime.types;\n    default_type  application/octet-stream;\n    sendfile      on;\n    server_names_hash_bucket_size 64;\n\n")
 	for _, u := range ups {
 		fmt.Fprintf(&b, "    upstream %s {\n", u.Name)
 		for p := u.PortBase; p < u.PortBase+4; p++ {

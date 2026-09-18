@@ -17,10 +17,19 @@ type Client struct {
 
 type Account struct{ ID, Name string }
 type Zone struct{ ID, Name string }
+// Tunnel: bentuk respons /cfd_tunnel. `connections` di API Cloudflare adalah
+// ARRAY objek koneksi (kosong kalau connector belum tersambung), bukan angka —
+// mendekodenya sebagai int membuat seluruh setup gagal dengan
+// "cannot unmarshal array into Go struct field".
 type Tunnel struct {
 	ID, Name, Status string
-	Connections      int
+	Connections      []struct {
+		ID string `json:"id"`
+	} `json:"connections"`
 }
+
+// ConnCount: jumlah koneksi aktif, dipakai UI ("N koneksi").
+func (t Tunnel) ConnCount() int { return len(t.Connections) }
 type Ingress struct {
 	Hostname string `json:"hostname,omitempty"`
 	Service  string `json:"service"`
@@ -106,9 +115,11 @@ func (c *Client) CreateTunnel(accountID, name string) (Tunnel, error) {
 	return t, c.do("POST", "/accounts/"+accountID+"/cfd_tunnel", body, &t)
 }
 
+// TunnelToken: connector token untuk cloudflared. Cloudflare hanya menerima
+// GET di endpoint ini — POST/PUT balas 1089 Method Not Allowed.
 func (c *Client) TunnelToken(accountID, tunnelID string) (string, error) {
 	var tok string
-	return tok, c.do("POST", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/token", nil, &tok)
+	return tok, c.do("GET", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/token", nil, &tok)
 }
 
 func (c *Client) TunnelStatus(accountID, tunnelID string) (Tunnel, error) {
@@ -116,13 +127,15 @@ func (c *Client) TunnelStatus(accountID, tunnelID string) (Tunnel, error) {
 	return t, c.do("GET", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID, nil, &t)
 }
 
+// GetConfig/PutConfig memakai /configurations (plural). Endpoint singular
+// /configuration mengembalikan 404 di API Cloudflare saat ini.
 func (c *Client) GetConfig(accountID, tunnelID string) (IngressConfig, error) {
 	var cfg IngressConfig
-	return cfg, c.do("GET", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configuration", nil, &cfg)
+	return cfg, c.do("GET", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configurations", nil, &cfg)
 }
 
 func (c *Client) PutConfig(accountID, tunnelID string, cfg IngressConfig) error {
-	return c.do("PUT", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configuration", cfg, nil)
+	return c.do("PUT", "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configurations", cfg, nil)
 }
 
 func (c *Client) CreateCNAME(zoneID, sub, tunnelID string) (string, error) {
