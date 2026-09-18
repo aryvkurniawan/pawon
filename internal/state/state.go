@@ -17,6 +17,10 @@ type Config struct {
 	PHPVersions []PHPVersion          `json:"php_versions"`
 	Services    map[string]ServiceCfg `json:"services"`
 	DB          DBCfg                 `json:"db"`
+	// LastZoneID mengingat zone terakhir yang dipakai saat menambah site,
+	// supaya form bisa memilihnya sebagai default. Mengelola 12 zone berarti
+	// memilih ulang tiap kali tanpa ini.
+	LastZoneID string `json:"last_zone_id,omitempty"`
 }
 
 type CloudflareCfg struct {
@@ -46,7 +50,11 @@ type Site struct {
 	DNSRecordID string    `json:"dns_record_id"`
 	IngressOK   bool      `json:"ingress_ok"`
 	DNSOK       bool      `json:"dns_ok"`
-	CreatedAt   time.Time `json:"created_at"`
+	// LocalOnly: site hanya dilayani lokal via <sub>.test (vhost + hosts),
+	// tanpa ingress tunnel dan tanpa CNAME. Untuk eksperimen cepat yang tidak
+	// perlu menyentuh domain publik sama sekali.
+	LocalOnly bool      `json:"local_only,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type DBCreds struct {

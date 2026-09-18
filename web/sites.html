@@ -19,6 +19,14 @@
 </nav>
 <main class="mx-auto max-w-5xl space-y-6 px-4 py-6">
 
+  <section id="scan-section" class="hidden rounded-xl border border-slate-800 bg-slate-900 p-4">
+    <div class="mb-3 flex items-center justify-between">
+      <h2 class="font-semibold text-white">Folder belum terdaftar</h2>
+      <span class="text-xs text-slate-500">dari <code class="text-slate-400">sites/</code> — klik Daftarkan untuk mengisi form</span>
+    </div>
+    <ul id="scan-list" class="space-y-2"></ul>
+  </section>
+
   <section class="rounded-xl border border-slate-800 bg-slate-900 p-4">
     <h2 class="mb-3 font-semibold text-white">Tambah Site</h2>
     <form id="site-form" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -27,7 +35,7 @@
           class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100">
       </label>
       <label class="text-xs text-slate-400 lg:col-span-2">Zone (domain)
-        <select id="f-zone" required class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"></select>
+        <select id="f-zone" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"></select>
       </label>
       <label class="text-xs text-slate-400 lg:col-span-2">Folder root
         <input id="f-root" required placeholder="C:/pawon/sites/app"
@@ -44,6 +52,9 @@
       </label>
       <label class="flex items-center gap-2 self-end text-sm text-slate-300">
         <input id="f-db" type="checkbox" class="size-4 rounded border-slate-600 bg-slate-950"> Buat database
+      </label>
+      <label class="flex items-center gap-2 self-end text-sm text-slate-300" title="Tanpa ingress tunnel & CNAME — hanya <sub>.test di mesin ini">
+        <input id="f-local" type="checkbox" class="size-4 rounded border-slate-600 bg-slate-950"> Lokal saja
       </label>
       <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 lg:col-span-2">
         Tambah Site
