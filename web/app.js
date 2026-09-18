@@ -245,6 +245,7 @@ async function loadSites() {
       <td class="px-3 py-2">${s.db ? `<span class="text-emerald-400">${esc(s.db.name)}</span> <span class="text-xs text-slate-500">${esc(s.db.user)}</span>` : `<span class="text-xs text-slate-500">tanpa DB</span>`}</td>
       <td class="px-3 py-2 space-x-1">${s.local_only ? `<span class="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300">lokal saja</span>` : `${badge(s.ingress_ok, "ingress", "ingress?")} ${badge(s.dns_ok, "dns", "dns?")}`}</td>
       <td class="whitespace-nowrap px-3 py-2 text-right">
+        ${s.local_only ? `<button data-act="pub" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" data-sub="${esc(s.subdomain)}" class="${BTN_GHOST}">Terbitkan</button>` : ""}
         <button data-act="db" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" data-has="${s.db ? "1" : ""}" class="${BTN_GHOST}">${s.db ? "Reset DB" : "Buat DB"}</button>
         <button data-act="env" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" class="${BTN_GHOST}">.env</button>
         <button data-act="del" data-id="${esc(s.id)}" data-host="${esc(s.hostname)}" class="${BTN_DANGER}">Hapus</button>
@@ -328,7 +329,37 @@ async function rowAction(e) {
     await loadSites();
   } else if (b.dataset.act === "env") {
     await openEnv(b.dataset.id, b.dataset.host);
+  } else if (b.dataset.act === "pub") {
+    await publishSite(b.dataset.id, b.dataset.host, b.dataset.sub);
   }
+}
+
+// publishSite: tanya zone dulu, baru terbitkan. Zone tidak ditebak — dengan 12
+// zone, salah pilih berarti CNAME nyangkut di domain yang salah.
+async function publishSite(id, host, sub) {
+  const res = (await api("/api/zones")) || {};
+  const zones = res.zones || [];
+  if (!zones.length) {
+    toast("Tunnel belum di-setup — setup dulu di halaman Tunnel", true);
+    return;
+  }
+  const daftar = zones.map((z, i) => `${i + 1}. ${z.name}`).join("\n");
+  const jawab = prompt(`Terbitkan ${host} ke domain mana?\n\n${daftar}\n\nKetik nomornya:`);
+  if (jawab === null) return;
+  const idx = Number(jawab.trim()) - 1;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= zones.length) {
+    toast("Nomor zone tidak valid", true);
+    return;
+  }
+  const z = zones[idx];
+  if (!confirm(`Terbitkan ${sub} ke https://${sub}.${z.name}?\n\nIngress tunnel + CNAME akan dibuat.`)) return;
+  try {
+    const s = await api(`/api/sites/${encodeURIComponent(id)}/publish`, { method: "POST", body: { zone_id: z.id } });
+    toast(`Site terbit: https://${s.hostname}`);
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+  await Promise.all([loadSites(), loadZones()]);
 }
 
 let envSiteId = null;

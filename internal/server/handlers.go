@@ -135,6 +135,34 @@ func (h handlers) sitesAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s)
 }
 
+// sitesPublish menerbitkan site lokal-saja ke domain publik: ingress + CNAME.
+// Dipisah dari Add supaya menerbitkan tidak perlu hapus+daftar ulang — cara itu
+// akan membuang kredensial DB yang tersimpan di state.
+func (h handlers) sitesPublish(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.St.Site(id); !ok {
+		writeErr(w, http.StatusNotFound, "site %q tidak ditemukan", id)
+		return
+	}
+	var p struct {
+		ZoneID string `json:"zone_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeErr(w, http.StatusBadRequest, "body: %v", err)
+		return
+	}
+	if h.Sites == nil {
+		writeErr(w, http.StatusInternalServerError, "sites manager tidak tersedia")
+		return
+	}
+	s, err := h.Sites.Publish(id, p.ZoneID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "%v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
 func (h handlers) sitesDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok := h.St.Site(id); !ok {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"pawon/internal/hosts"
 	"pawon/internal/nginx"
@@ -46,6 +47,10 @@ type Manager struct {
 	// SitesDir: folder yang dipindai Scan() untuk menemukan folder belum
 	// terdaftar. Kosong → <StackRoot>/sites.
 	SitesDir string
+	// mu menyerialkan mutasi (Add/Publish/Remove). Ingress tunnel dikelola
+	// dengan pola GET-modify-PUT, jadi dua penambahan bersamaan bisa saling
+	// menimpa daftar ingress-nya.
+	mu sync.Mutex
 }
 
 type AddParams struct {
@@ -57,6 +62,8 @@ type AddParams struct {
 }
 
 func (m *Manager) Add(p AddParams) (state.Site, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if !subRe.MatchString(p.Subdomain) {
 		return state.Site{}, fmt.Errorf("subdomain tidak valid: %q", p.Subdomain)
 	}
@@ -163,6 +170,93 @@ func (m *Manager) Add(p AddParams) (state.Site, error) {
 	return m.St.Sites[len(m.St.Sites)-1], m.St.Save(m.StatePath)
 }
 
+// Publish mengubah site lokal-saja menjadi terbit: menambahkan ingress tunnel
+// dan CNAME untuk <sub>.<zone>, lalu menulis ulang vhost-nya supaya hostname
+// publik ikut masuk server_name.
+//
+// Dibuat sebagai operasi tersendiri, bukan hapus+daftar ulang, karena
+// menghapus site akan membuang kredensial DB yang tersimpan di state — dan
+// kredensial itu tidak bisa dipulihkan.
+func (m *Manager) Publish(id, zoneID string) (state.Site, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.St.Site(id)
+	if !ok {
+		return state.Site{}, fmt.Errorf("site %q tidak ditemukan", id)
+	}
+	if !s.LocalOnly {
+		return state.Site{}, fmt.Errorf("site %s sudah terbit", s.Hostname)
+	}
+	if zoneID == "" {
+		return state.Site{}, fmt.Errorf("zone wajib dipilih untuk menerbitkan")
+	}
+	zone, ok := zoneByID(m.St, zoneID)
+	if !ok {
+		return state.Site{}, fmt.Errorf("zone %q tidak ditemukan", zoneID)
+	}
+	cf := m.cfFor()
+	if cf == nil {
+		return state.Site{}, fmt.Errorf("tunnel belum di-setup — setup tunnel dulu untuk menerbitkan")
+	}
+
+	hostname := s.Subdomain + "." + zone.Name
+	// Tolak kalau hostname publiknya sudah dipakai site lain. Tanpa ini dua
+	// site berebut satu nama file vhost (<hostname>.conf).
+	if other, exists := m.St.SiteByHostname(hostname); exists && other.ID != s.ID {
+		return state.Site{}, fmt.Errorf("site %s sudah ada", hostname)
+	}
+
+	oldConf := s.NginxConf
+	oldHostname := s.Hostname
+	oldZone := s.ZoneID
+	s.Hostname, s.ZoneID, s.LocalOnly = hostname, zoneID, false
+
+	conf, err := m.writeVhost(s)
+	if err != nil {
+		return state.Site{}, err
+	}
+	s.NginxConf = conf
+	// writeVhost menulis file baru (nama file berubah), jadi buang yang lama.
+	if oldConf != "" && oldConf != conf {
+		os.Remove(oldConf)
+	}
+	rollback := func() {
+		os.Remove(conf)
+		s.Hostname, s.ZoneID, s.LocalOnly = oldHostname, oldZone, true
+		s.NginxConf = oldConf
+		if oldConf != "" {
+			m.writeVhost(s)
+		}
+	}
+	if err := m.Run.Validate(); err != nil {
+		rollback()
+		return state.Site{}, err
+	}
+	if err := cf.UpsertIngress(hostname, ingressService); err != nil {
+		rollback()
+		return state.Site{}, err
+	}
+	rec, err := cf.UpsertCNAME(zoneID, s.Subdomain, m.St.Cloudflare.TunnelID)
+	if err != nil {
+		cf.DeleteIngress(hostname)
+		rollback()
+		return state.Site{}, err
+	}
+	s.DNSRecordID, s.IngressOK, s.DNSOK = rec, true, true
+	if err := m.Run.Reload(); err != nil {
+		cf.DeleteIngress(hostname)
+		cf.DeleteCNAME(zoneID, rec)
+		rollback()
+		return state.Site{}, err
+	}
+	m.St.UpdateSite(s)
+	m.St.LastZoneID = zoneID
+	if err := m.St.Save(m.StatePath); err != nil {
+		return state.Site{}, err
+	}
+	return s, nil
+}
+
 // validPHP: versi harus ada di daftar versi terpasang dan aktif. Tanpa ini,
 // nilai sembarang dari request masuk ke nama upstream nginx dan config-nya
 // ditolak saat `nginx -t` — pesan errornya membingungkan dan vhost sudah
@@ -213,6 +307,8 @@ func (m *Manager) CFFor() Cloudflare { return m.cfFor() }
 // Remove kebalikan Add: CF delete → hosts remove → vhost hapus + reload →
 // state remove + save. cf boleh nil (site lokal).
 func (m *Manager) Remove(id string, cf Cloudflare) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	s, ok := m.St.Site(id)
 	if !ok {
 		return fmt.Errorf("site %q tidak ditemukan", id)

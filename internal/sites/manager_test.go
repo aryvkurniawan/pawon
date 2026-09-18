@@ -358,3 +358,119 @@ func TestServerNames(t *testing.T) {
 		}
 	}
 }
+
+func TestPublishLocalOnlySite(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/bk"), 0o755)
+	st := baseState("tun1")
+	cf := &fakeCF{}
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, CF: cf}
+
+	s, err := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	oldConf := s.NginxConf
+	// Simulasi site yang sudah punya DB: Publish tidak boleh menyentuhnya.
+	s.DB = &state.DBCreds{Name: "bk", User: "bk", Password: "rahasia"}
+	st.UpdateSite(s)
+
+	got, err := m.Publish(s.ID, "z1")
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if got.Hostname != "bk.example.com" {
+		t.Errorf("hostname = %q, mau bk.example.com", got.Hostname)
+	}
+	if got.LocalOnly {
+		t.Error("LocalOnly masih true setelah terbit")
+	}
+	if !got.IngressOK || !got.DNSOK {
+		t.Errorf("ingress/dns tidak ditandai: %v/%v", got.IngressOK, got.DNSOK)
+	}
+	if cf.ingress != 1 || cf.cname != 1 {
+		t.Errorf("CF dipanggil %d/%d kali, mau 1/1", cf.ingress, cf.cname)
+	}
+	// Kredensial DB harus selamat — inilah alasan Publish ada.
+	if got.DB == nil || got.DB.Password != "rahasia" {
+		t.Errorf("kredensial DB hilang: %+v", got.DB)
+	}
+	if got.ID != s.ID {
+		t.Errorf("ID site berubah: %q → %q", s.ID, got.ID)
+	}
+	// Vhost lama (nama file berubah) harus dibuang, yang baru memuat hostname publik.
+	if _, err := os.Stat(oldConf); !os.IsNotExist(err) {
+		t.Error("vhost lama masih ada")
+	}
+	conf, err := os.ReadFile(got.NginxConf)
+	if err != nil {
+		t.Fatalf("baca vhost baru: %v", err)
+	}
+	if !strings.Contains(string(conf), "bk.example.com") || !strings.Contains(string(conf), "bk.test") {
+		t.Errorf("vhost baru tidak memuat kedua hostname:\n%s", conf)
+	}
+}
+
+func TestPublishRejects(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/bk"), 0o755)
+
+	t.Run("tunnel belum setup", func(t *testing.T) {
+		st := baseState("")
+		m := &Manager{St: &st, StatePath: filepath.Join(dir, "p.json"),
+			StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+		s, _ := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+		if _, err := m.Publish(s.ID, "z1"); err == nil {
+			t.Fatal("Publish tanpa tunnel seharusnya gagal")
+		}
+	})
+
+	t.Run("sudah terbit", func(t *testing.T) {
+		st := baseState("tun1")
+		m := &Manager{St: &st, StatePath: filepath.Join(dir, "p2.json"),
+			StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+		s, _ := m.Add(AddParams{Subdomain: "bk", ZoneID: "z1", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4"})
+		if _, err := m.Publish(s.ID, "z1"); err == nil {
+			t.Fatal("Publish pada site yang sudah terbit seharusnya gagal")
+		}
+	})
+
+	t.Run("zone kosong", func(t *testing.T) {
+		st := baseState("tun1")
+		m := &Manager{St: &st, StatePath: filepath.Join(dir, "p3.json"),
+			StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+		s, _ := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+		if _, err := m.Publish(s.ID, ""); err == nil {
+			t.Fatal("Publish tanpa zone seharusnya gagal")
+		}
+	})
+}
+
+func TestPublishRollbackKeepsLocalVhost(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/bk"), 0o755)
+	st := baseState("tun1")
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+	s, _ := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+
+	// nginx -t gagal → semua harus kembali seperti semula.
+	m.Run = &fakeRunner{failValidate: true}
+	if _, err := m.Publish(s.ID, "z1"); err == nil {
+		t.Fatal("Publish seharusnya gagal saat nginx -t gagal")
+	}
+	after, _ := st.Site(s.ID)
+	if !after.LocalOnly || after.Hostname != "bk.test" {
+		t.Errorf("state tidak dikembalikan: local_only=%v host=%q", after.LocalOnly, after.Hostname)
+	}
+	if _, err := os.Stat(filepath.Join(root, "nginx", "conf", "sites.d", "bk.example.com.conf")); !os.IsNotExist(err) {
+		t.Error("vhost publik tertinggal setelah gagal")
+	}
+	if _, err := os.Stat(filepath.Join(root, "nginx", "conf", "sites.d", "bk.test.conf")); err != nil {
+		t.Errorf("vhost lokal hilang setelah gagal: %v", err)
+	}
+}

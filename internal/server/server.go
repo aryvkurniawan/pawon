@@ -38,6 +38,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/sites", h.sitesList)
 	mux.HandleFunc("GET /api/sites/scan", h.sitesScan)
 	mux.HandleFunc("POST /api/sites", h.sitesAdd)
+	mux.HandleFunc("POST /api/sites/{id}/publish", h.sitesPublish)
 	mux.HandleFunc("DELETE /api/sites/{id}", h.sitesDelete)
 	mux.HandleFunc("GET /api/zones", h.zones)
 	mux.HandleFunc("POST /api/tunnel/setup", h.tunnelSetup)
@@ -88,6 +89,14 @@ func guard(next http.Handler) http.Handler {
 // membaca file di bawah dir package-nya) dan FS-nya di-inject lewat Deps.
 // "/" → index.html, /<name>.html & aset (/app.js, /static/*) via FileServer;
 // path /api/* yang tidak cocok pattern mux → 404 JSON konsisten dengan API.
+//
+// static menyajikan UI yang di-embed. Aset ditandai must-revalidate supaya
+// browser tidak memakai salinan lama setelah panel di-update.
+//
+// Tanpa header ini browser memakai heuristic caching (Last-Modified), dan
+// app.js lama bisa tetap jalan berhari-hari. Itu bukan sekadar tampilan basi:
+// JS lama yang memanggil API baru bisa diam-diam rusak — mis. /api/zones yang
+// berubah dari array jadi objek membuat dropdown zone kosong tanpa error.
 func static(web fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
@@ -99,6 +108,7 @@ func static(web fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 		http.FileServer(http.FS(web)).ServeHTTP(w, r)
 	})
 }
