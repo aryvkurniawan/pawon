@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,7 +106,7 @@ func TestEnvGetPut(t *testing.T) {
 	id := d.St.Sites[len(d.St.Sites)-1].ID
 	w := httptest.NewRecorder()
 	New(d).ServeHTTP(w, req("PUT", "/api/sites/"+id+"/env",
-		"APP_KEY=base64:xyz\n"))
+		`"APP_KEY=base64:xyz\n"`))
 	if w.Code != 200 {
 		t.Fatalf("put env: %d %s", w.Code, w.Body)
 	}
@@ -170,6 +171,62 @@ func TestGuardRequiresJSONBody(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatalf("GET harus 200, dapat %d", w.Code)
+	}
+}
+
+// TestGuardAllowsBodylessMutations — regresi: guard Content-Type sempat
+// memblokir endpoint yang tidak mengirim body sama sekali (stop/start/restart
+// layanan), sehingga tombol di dashboard diam-diam gagal. UI kini selalu
+// mengirim Content-Type: application/json, dan test ini mengunci kontraknya.
+func TestGuardAllowsBodylessMutations(t *testing.T) {
+	d := testDeps(t)
+	d.Sup = proc.New()
+	h := New(d)
+	for _, p := range []string{
+		"/api/services/nginx/start",
+		"/api/services/nginx/stop",
+		"/api/services/nginx/restart",
+	} {
+		r := httptest.NewRequest("POST", p, nil)
+		r.Host = "127.0.0.1:7080"
+		r.Header.Set("Content-Type", "application/json") // UI selalu mengirim ini
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code == 415 {
+			t.Errorf("%s ditolak guard Content-Type: %s", p, w.Body)
+		}
+	}
+	// Tanpa Content-Type tetap ditolak — itu inti pertahanan CSRF-nya.
+	r := httptest.NewRequest("POST", "/api/services/nginx/start", nil)
+	r.Host = "127.0.0.1:7080"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 415 {
+		t.Errorf("tanpa Content-Type harus 415, dapat %d", w.Code)
+	}
+}
+
+// TestEnvPutAcceptsJSONString — isi .env adalah teks bebas, jadi dikirim
+// sebagai string JSON. Sebelumnya handler menulis body mentah, sehingga
+// JSON.stringify akan menuliskan tanda kutip ke dalam file .env.
+func TestEnvPutAcceptsJSONString(t *testing.T) {
+	d := testDeps(t)
+	root := t.TempDir()
+	d.St.AddSite(state.Site{Root: root, Type: "laravel"})
+	id := d.St.Sites[len(d.St.Sites)-1].ID
+	body := "APP_NAME=Pawon\nDB_PASSWORD=\"rahasia\"\n"
+	encoded, _ := json.Marshal(body) // string JSON, seperti dikirim UI
+	w := httptest.NewRecorder()
+	New(d).ServeHTTP(w, req("PUT", "/api/sites/"+id+"/env", string(encoded)))
+	if w.Code != 200 {
+		t.Fatalf("put env: %d %s", w.Code, w.Body)
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != body {
+		t.Fatalf(".env tidak sama dengan isi asli:\nwant %q\ngot  %q", body, b)
 	}
 }
 

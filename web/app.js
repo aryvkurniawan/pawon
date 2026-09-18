@@ -15,18 +15,26 @@ const BTN_DANGER = `${BTN} border border-red-800/60 text-red-300 hover:bg-red-95
 const badge = (ok, on, off) =>
   `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${ok ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}">${ok ? esc(on) : esc(off)}</span>`;
 
-// api: fetch + JSON + toast error. raw=true → body teks (GET/PUT .env);
-// quiet=true → tanpa toast (untuk polling yang gagal itu normal).
+// api: fetch + JSON + toast error. raw=true → respons dibaca sebagai teks
+// (GET .env); quiet=true → tanpa toast (untuk polling yang gagal itu normal).
+//
+// Content-Type: application/json SELALU dikirim untuk POST/PUT, termasuk saat
+// tanpa body. Endpoint mutasi mewajibkannya sebagai pertahanan CSRF: request
+// lintas-origin dengan Content-Type JSON memicu preflight, sedangkan
+// text/plain & form-urlencoded (CORS-safelisted) tidak — jadi tanpa aturan ini
+// halaman web mana pun bisa memanggil stop/start layanan diam-diam.
 async function api(path, { method = "GET", body, raw = false, quiet = false } = {}) {
   const init = { method, headers: {} };
+  if (method === "POST" || method === "PUT") {
+    init.headers["Content-Type"] = "application/json";
+  }
   if (body !== undefined) {
-    init.body = raw ? String(body) : JSON.stringify(body);
-    init.headers["Content-Type"] = raw ? "text/plain" : "application/json";
+    init.body = JSON.stringify(body);
   }
   let res, data;
   try {
     res = await fetch(path, init);
-    data = raw || !(res.headers.get("content-type") || "").includes("json") ? await res.text() : await res.json();
+    data = raw ? await res.text() : await res.json();
   } catch (e) {
     if (!quiet) toast(`Gagal menghubungi panel: ${e.message}`, "err");
     throw e;
@@ -61,40 +69,104 @@ async function phpVersions() {
 
 let lastStatus = "";
 
+// groupServices: satu kartu per layanan, tapi worker PHP (php-8.4-1..4)
+// dikelompokkan jadi satu kartu per versi. Tiap versi menjalankan 4 worker,
+// jadi tanpa pengelompokan dashboard menampilkan 16 kartu PHP yang isinya
+// nyaris sama — dan satu worker mati dari empat justru tenggelam di antara
+// tiga kartu hijau lainnya.
+function groupServices(services) {
+  const groups = new Map();
+  for (const s of services || []) {
+    const m = /^php-([\d.]+)-(\d+)$/.exec(s.Name);
+    const key = m ? `php-${m[1]}` : s.Name;
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, name: key, isPHP: !!m, version: m ? m[1] : "", workers: [], running: 0, restarts: 0, lastErr: "" };
+      groups.set(key, g);
+    }
+    if (m) {
+      g.workers.push(s);
+      if (s.Running) g.running++;
+      g.restarts += s.Restarts || 0;
+      // Error worker yang mati lebih berguna daripada worker yang sehat.
+      if (!s.Running && s.LastErr) g.lastErr = s.LastErr;
+    } else {
+      g.svc = s;
+      g.running = s.Running ? 1 : 0;
+      g.restarts = s.Restarts || 0;
+      g.lastErr = s.LastErr || "";
+    }
+  }
+  return [...groups.values()];
+}
+
+function serviceCard(g) {
+  const total = g.isPHP ? g.workers.length : 1;
+  const ok = g.isPHP ? g.running > 0 : g.running === 1;
+  const label = g.isPHP ? `${g.running}/${total} worker` : g.running ? "jalan" : "mati";
+  // Worker PHP punya port masing-masing (pool 9100+, 9200+, …).
+  const pids = g.isPHP
+    ? g.workers.filter((w) => w.Running).map((w) => w.PID).filter(Boolean)
+    : [g.svc.PID].filter(Boolean);
+  const pid = pids.length ? (pids.length > 4 ? `${pids.slice(0, 3).join(", ")} +${pids.length - 3}` : pids.join(", ")) : "\u2013";
+  const restartNote = g.restarts ? ` \u00b7 restart ${g.restarts}` : "";
+  // Aksi dikirim per-worker (Supervisor tidak mengenal grup).
+  const targets = g.isPHP ? g.workers.map((w) => w.Name) : [g.svc.Name];
+  const btn = (op, cls, text) =>
+    targets.map((n) => `<button data-op="${op}" data-svc="${esc(n)}" class="${cls}">${text}</button>`).join("");
+  const acts = g.isPHP
+    ? `<div class="mt-3 flex gap-2">
+         <button data-op="start" data-group="${esc(g.key)}" class="${BTN_START}">Start semua</button>
+         <button data-op="stop" data-group="${esc(g.key)}" class="${BTN_STOP}">Stop semua</button>
+       </div>
+       <div class="mt-2 flex flex-wrap gap-2">
+         ${g.workers.map((w) => `<button data-op="restart" data-svc="${esc(w.Name)}" class="${BTN_RESTART}">${esc(w.Name.replace("php-" + g.version + "-", "#"))}</button>`).join("")}
+       </div>`
+    : `<div class="mt-3 flex gap-2">${btn("start", BTN_START, "Start")}${btn("stop", BTN_STOP, "Stop")}${btn("restart", BTN_RESTART, "Restart")}</div>`;
+  return `
+    <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+      <div class="flex items-center justify-between gap-2">
+        <h3 class="font-semibold text-white">${esc(g.name)}</h3>
+        ${badge(ok, label, label)}
+      </div>
+      <p class="mt-1 truncate text-xs text-slate-500">PID ${esc(pid)}${restartNote}${g.lastErr ? " \u00b7 " + esc(g.lastErr) : ""}</p>
+      ${acts}
+    </div>`;
+}
+
 async function refreshStatus() {
   const s = await api("/api/status");
   const sig = JSON.stringify(s);
   if (sig === lastStatus) return;
   lastStatus = sig;
-  $("#services").innerHTML = (s.services || []).map((v) => `
-    <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
-      <div class="flex items-center justify-between gap-2">
-        <h3 class="font-semibold text-white">${esc(v.Name)}</h3>
-        ${badge(v.Running, "jalan", "mati")}
-      </div>
-      <p class="mt-1 truncate text-xs text-slate-500">PID ${v.PID || "\u2013"} · restart ${v.Restarts}${v.LastErr ? " · " + esc(v.LastErr) : ""}</p>
-      <div class="mt-3 flex gap-2">
-        <button data-op="start" data-svc="${esc(v.Name)}" class="${BTN_START}">Start</button>
-        <button data-op="stop" data-svc="${esc(v.Name)}" class="${BTN_STOP}">Stop</button>
-        <button data-op="restart" data-svc="${esc(v.Name)}" class="${BTN_RESTART}">Restart</button>
-      </div>
-    </div>`).join("");
+  $("#services").innerHTML = groupServices(s.services).map(serviceCard).join("");
   $("#sum-sites").textContent = s.sites ?? 0;
   const t = s.tunnel;
   $("#sum-tunnel").innerHTML = t
-    ? badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections} koneksi`, `${esc(t.Status)} · ${t.Connections} koneksi`)
+    ? badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`, `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`)
     : s.err
       ? `<span class="text-xs text-red-400">${esc(s.err)}</span>`
       : badge(false, "", "belum di-setup");
 }
 
 async function serviceAction(e) {
-  const b = e.target.closest("button[data-svc]");
+  const b = e.target.closest("button[data-op]");
   if (!b) return;
   b.disabled = true;
+  const op = b.dataset.op;
   try {
-    await api(`/api/services/${encodeURIComponent(b.dataset.svc)}/${b.dataset.op}`, { method: "POST" });
-    toast(`${b.dataset.svc}: ${b.dataset.op} OK`);
+    if (b.dataset.group) {
+      // Start/Stop "semua": kirim ke tiap worker grup, tunggu semuanya.
+      const s = await api("/api/status");
+      const names = (s.services || []).filter((x) => x.Name.startsWith(b.dataset.group + "-")).map((x) => x.Name);
+      const results = await Promise.allSettled(names.map((n) => api(`/api/services/${encodeURIComponent(n)}/${op}`, { method: "POST", quiet: true })));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed) toast(`${b.dataset.group}: ${failed}/${names.length} worker gagal di-${op}`, "err");
+      else toast(`${b.dataset.group}: ${op} ${names.length} worker OK`);
+    } else {
+      await api(`/api/services/${encodeURIComponent(b.dataset.svc)}/${op}`, { method: "POST" });
+      toast(`${b.dataset.svc}: ${op} OK`);
+    }
   } catch {}
   b.disabled = false;
   refreshStatus();
@@ -227,7 +299,8 @@ function closeEnv() {
 
 async function saveEnv() {
   if (!envSiteId) return;
-  await api(`/api/sites/${encodeURIComponent(envSiteId)}/env`, { method: "PUT", raw: true, body: $("#env-text").value });
+  // Body dikirim sebagai string JSON (guard mewajibkan Content-Type JSON).
+  await api(`/api/sites/${encodeURIComponent(envSiteId)}/env`, { method: "PUT", body: $("#env-text").value });
   toast(".env disimpan");
   closeEnv();
 }
@@ -282,7 +355,7 @@ async function refreshTunnel() {
     const t = await api("/api/tunnel/status", { quiet: true });
     box.innerHTML = `
       <div class="flex flex-wrap items-center gap-3">
-        ${badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections} koneksi`, `${esc(t.Status)} · ${t.Connections} koneksi`)}
+        ${badge(t.Status === "healthy", `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`, `${esc(t.Status)} · ${t.Connections?.length ?? 0} koneksi`)}
         <span class="text-slate-300">Tunnel <b class="text-white">${esc(t.Name)}</b></span>
         <span class="font-mono text-xs text-slate-500">${esc(t.ID)}</span>
       </div>`;

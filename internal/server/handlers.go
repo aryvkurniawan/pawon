@@ -253,11 +253,19 @@ func (h handlers) envPut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "body: %v", err)
 		return
 	}
+	// Guard mewajibkan Content-Type JSON di semua POST/PUT (pertahanan CSRF:
+	// JSON memicu preflight, text/plain tidak). Isi .env adalah teks bebas,
+	// jadi ia dikirim sebagai string JSON dan didekode di sini.
+	var content string
+	if err := json.Unmarshal(b, &content); err != nil {
+		writeErr(w, http.StatusBadRequest, "body harus string JSON: %v", err)
+		return
+	}
 	if err := os.MkdirAll(s.Root, 0o755); err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	if err := os.WriteFile(envPath(s), b, 0o600); err != nil {
+	if err := os.WriteFile(envPath(s), []byte(content), 0o600); err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

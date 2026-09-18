@@ -193,6 +193,9 @@ func panel(stop chan struct{}) error {
 	tun := &tunnel.Manager{
 		St: &st, StatePath: statePath, API: api, Sup: sup,
 		CloudflaredExe: filepath.Join(root, "bin", "cloudflared.exe"),
+		// Setup() memakai factory ini untuk token yang baru dipaste, sehingga
+		// setup dari UI langsung berlaku tanpa restart panel.
+		NewAPI: func(tok string) tunnel.API { return cf.New(tok) },
 	}
 	// Adapter CF selalu terpasang; pemakaiannya digerbang per-operasi oleh
 	// sites.Manager lewat cfFor(). Sebelumnya adapter hanya dibuat saat boot
