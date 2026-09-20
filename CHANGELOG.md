@@ -6,6 +6,9 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi
 
 Perbaikan enam bug yang dilaporkan di issue #1–#6 + multi-PHP 8.1–8.4.
 
+### Diubah
+- `docs/` dan `pawon.exe~` tidak lagi dilacak git (masing-masing 12 MB dan dokumen kerja lokal); keduanya kini di `.gitignore`. File tetap ada di disk.
+
 ### Ditambahkan
 - Multi-PHP: pin PHP 8.1.34, 8.2.33, 8.3.33, 8.4.25 (NTS x64) dengan port pool kanonik 9100/9200/9300/9400. Tiap seri punya folder + php.ini sendiri.
 - Tombol **Buat DB** / **Reset DB** per site di halaman Sites (sebelumnya hanya saat create site).
