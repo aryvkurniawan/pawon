@@ -206,6 +206,8 @@ func panel(stop chan struct{}) error {
 		St: &st, StatePath: statePath, StackRoot: root,
 		Run: nginxRunner{exe: filepath.Join(nginxHome, "nginx.exe"), prefix: prefix(nginxHome), conf: mainConf},
 		CF:  cfAdapter,
+		// Folder konvensi untuk site; dipindai GET /api/sites/scan.
+		SitesDir: filepath.Join(root, "sites"),
 	}
 	if sysroot := os.Getenv("SystemRoot"); sysroot != "" {
 		sm.HostsPath = filepath.Join(sysroot, "System32", "drivers", "etc", "hosts")
@@ -349,7 +351,7 @@ func writeNginxConf(st *state.Config, root, nginxHome, mainConf, logsDir string)
 	var vhosts []nginx.Vhost
 	for _, s := range st.Sites {
 		vhosts = append(vhosts, nginx.Vhost{
-			ServerNames: []string{s.Hostname, s.Subdomain + ".test"},
+			ServerNames: sites.ServerNames(s),
 			Docroot:     s.Docroot,
 			Pool:        php.PoolName(s.PHP),
 			AccessLog:   filepath.ToSlash(filepath.Join(logsDir, "nginx", s.Hostname+"-access.log")),

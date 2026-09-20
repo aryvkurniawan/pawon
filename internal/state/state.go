@@ -17,6 +17,10 @@ type Config struct {
 	PHPVersions []PHPVersion          `json:"php_versions"`
 	Services    map[string]ServiceCfg `json:"services"`
 	DB          DBCfg                 `json:"db"`
+	// LastZoneID mengingat zone terakhir yang dipakai saat menambah site,
+	// supaya form bisa memilihnya sebagai default. Mengelola 12 zone berarti
+	// memilih ulang tiap kali tanpa ini.
+	LastZoneID string `json:"last_zone_id,omitempty"`
 }
 
 type CloudflareCfg struct {
@@ -33,20 +37,24 @@ type Zone struct {
 }
 
 type Site struct {
-	ID          string    `json:"id"`
-	Subdomain   string    `json:"subdomain"`
-	ZoneID      string    `json:"zone_id"`
-	Hostname    string    `json:"hostname"`
-	Root        string    `json:"root"`
-	Docroot     string    `json:"docroot"`
-	Type        string    `json:"type"` // "php"|"laravel"
-	PHP         string    `json:"php"`  // "8.4"
-	DB          *DBCreds  `json:"db,omitempty"`
-	NginxConf   string    `json:"nginx_conf"`
-	DNSRecordID string    `json:"dns_record_id"`
-	IngressOK   bool      `json:"ingress_ok"`
-	DNSOK       bool      `json:"dns_ok"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string   `json:"id"`
+	Subdomain   string   `json:"subdomain"`
+	ZoneID      string   `json:"zone_id"`
+	Hostname    string   `json:"hostname"`
+	Root        string   `json:"root"`
+	Docroot     string   `json:"docroot"`
+	Type        string   `json:"type"` // "php"|"laravel"
+	PHP         string   `json:"php"`  // "8.4"
+	DB          *DBCreds `json:"db,omitempty"`
+	NginxConf   string   `json:"nginx_conf"`
+	DNSRecordID string   `json:"dns_record_id"`
+	IngressOK   bool     `json:"ingress_ok"`
+	DNSOK       bool     `json:"dns_ok"`
+	// LocalOnly: site hanya dilayani lokal via <sub>.test (vhost + hosts),
+	// tanpa ingress tunnel dan tanpa CNAME. Untuk eksperimen cepat yang tidak
+	// perlu menyentuh domain publik sama sekali.
+	LocalOnly bool      `json:"local_only,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type DBCreds struct {
@@ -110,6 +118,21 @@ func (c *Config) AddSite(s Site) {
 	s.ID = hex.EncodeToString(b)
 	s.CreatedAt = time.Now().UTC()
 	c.Sites = append(c.Sites, s)
+}
+
+// UpdateSite mengganti site dengan ID yang sama. Mengembalikan false kalau
+// tidak ada — pemanggil tidak boleh diam-diam menambah site baru.
+func (c *Config) UpdateSite(s Site) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range c.Sites {
+		if c.Sites[i].ID == s.ID {
+			s.CreatedAt = c.Sites[i].CreatedAt // jangan hilangkan waktu pembuatan
+			c.Sites[i] = s
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) RemoveSite(id string) bool {
