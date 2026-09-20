@@ -79,7 +79,7 @@ go vet ./...
 tools\tailwindcss.exe -i web\tw.css -o web\static\app.css --minify
 ```
 
-Dokumen desain: [`docs/superpowers/specs/2026-09-04-pawon-design.md`](docs/superpowers/specs/2026-09-04-pawon-design.md) · Plan implementasi: [`docs/superpowers/plans/2026-09-04-pawon.md`](docs/superpowers/plans/2026-09-04-pawon.md)
+Dokumen desain & plan implementasi ada di `docs/superpowers/` (lokal, tidak ikut repo).
 
 ## Status / Catatan
 
