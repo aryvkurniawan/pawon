@@ -8,8 +8,10 @@ Perbaikan enam bug yang dilaporkan di issue #1–#6 + multi-PHP 8.1–8.4.
 
 ### Diubah
 - `docs/` dan `pawon.exe~` tidak lagi dilacak git (masing-masing 12 MB dan dokumen kerja lokal); keduanya kini di `.gitignore`. File tetap ada di disk.
+- `GET /api/zones` kini membalas `{zones, last_zone_id}` (sebelumnya array polos), dan aset UI dikirim dengan `Cache-Control: no-cache, must-revalidate` supaya `app.js` lama tidak tertinggal di browser.
 
 ### Ditambahkan
+- Deteksi folder `sites/` + mode **lokal saja** (PR #10): `GET /api/sites/scan` melaporkan folder yang belum terdaftar (read-only, tidak auto-register — folder berisi `.env` tidak pernah terbit sendiri). Site lokal-saja cukup vhost + hosts, tanpa ingress/CNAME; zone jadi opsional dan yang terakhir dipakai diingat sebagai default. Site lokal-saja bisa **diterbitkan** belakangan (`POST /api/sites/{id}/publish`) tanpa hapus+daftar ulang, sehingga kredensial DB yang tersimpan di state tidak hilang.
 - Multi-PHP: pin PHP 8.1.34, 8.2.33, 8.3.33, 8.4.25 (NTS x64) dengan port pool kanonik 9100/9200/9300/9400. Tiap seri punya folder + php.ini sendiri.
 - Tombol **Buat DB** / **Reset DB** per site di halaman Sites (sebelumnya hanya saat create site).
 - Panel menulis `pawon-data/logs/pawon.log` — sebelumnya menu "Panel (pawon.log)" di log viewer selalu 404.
