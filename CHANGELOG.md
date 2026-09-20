@@ -6,7 +6,7 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi
 
 Enam bug dari issue #1–#6, enam bug setup tunnel dari issue #8, multi-PHP 8.1–8.4, dan mode lokal-saja.
 
-**Catatan upgrade:** state lama otomatis termigrasi (PHP 8.4 dipetakan ke port kanonik 9400). Kalau panel dipakai sebagai Windows service, restart panel sekali setelah update supaya adapter Cloudflare terpasang untuk site berikutnya.
+**Catatan upgrade:** state lama otomatis termigrasi (PHP 8.4 dipetakan ke port kanonik 9400). PHP 8.1–8.3 akan diunduh saat pertama kali dijalankan. Tidak perlu hapus `pawon-data/`.
 
 ### Diubah
 - `docs/` dan `pawon.exe~` tidak lagi dilacak git (masing-masing 12 MB dan dokumen kerja lokal); keduanya kini di `.gitignore`. File tetap ada di disk.
