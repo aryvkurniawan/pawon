@@ -2,16 +2,19 @@
 
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi mengikuti [SemVer](https://semver.org/lang/id/).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-20
 
-Perbaikan enam bug yang dilaporkan di issue #1–#6 + multi-PHP 8.1–8.4.
+Enam bug dari issue #1–#6, enam bug setup tunnel dari issue #8, multi-PHP 8.1–8.4, dan mode lokal-saja.
+
+**Catatan upgrade:** state lama otomatis termigrasi (PHP 8.4 dipetakan ke port kanonik 9400). Kalau panel dipakai sebagai Windows service, restart panel sekali setelah update supaya adapter Cloudflare terpasang untuk site berikutnya.
 
 ### Diubah
 - `docs/` dan `pawon.exe~` tidak lagi dilacak git (masing-masing 12 MB dan dokumen kerja lokal); keduanya kini di `.gitignore`. File tetap ada di disk.
 - `GET /api/zones` kini membalas `{zones, last_zone_id}` (sebelumnya array polos), dan aset UI dikirim dengan `Cache-Control: no-cache, must-revalidate` supaya `app.js` lama tidak tertinggal di browser.
 
 ### Ditambahkan
-- Deteksi folder `sites/` + mode **lokal saja** (PR #10): `GET /api/sites/scan` melaporkan folder yang belum terdaftar (read-only, tidak auto-register — folder berisi `.env` tidak pernah terbit sendiri). Site lokal-saja cukup vhost + hosts, tanpa ingress/CNAME; zone jadi opsional dan yang terakhir dipakai diingat sebagai default. Site lokal-saja bisa **diterbitkan** belakangan (`POST /api/sites/{id}/publish`) tanpa hapus+daftar ulang, sehingga kredensial DB yang tersimpan di state tidak hilang.
+- Deteksi folder `sites/` + mode **lokal saja** (PR #10): `GET /api/sites/scan` melaporkan folder yang belum terdaftar (read-only, tidak auto-register — folder berisi `.env` tidak pernah terbit sendiri). Site lokal-saja cukup vhost + hosts, tanpa ingress/CNAME; zone jadi opsional dan yang terakhir dipakai diingat sebagai default.
+- **Terbitkan** site lokal-saja (`POST /api/sites/{id}/publish`) tanpa hapus+daftar ulang, sehingga kredensial DB yang tersimpan di state tidak hilang. Ada tombolnya di tabel Sites.
 - Multi-PHP: pin PHP 8.1.34, 8.2.33, 8.3.33, 8.4.25 (NTS x64) dengan port pool kanonik 9100/9200/9300/9400. Tiap seri punya folder + php.ini sendiri.
 - Tombol **Buat DB** / **Reset DB** per site di halaman Sites (sebelumnya hanya saat create site).
 - Panel menulis `pawon-data/logs/pawon.log` — sebelumnya menu "Panel (pawon.log)" di log viewer selalu 404.
@@ -26,6 +29,7 @@ Perbaikan enam bug yang dilaporkan di issue #1–#6 + multi-PHP 8.1–8.4.
 - **#4** Subdomain duplikat pada zone sama membuat vhost saling menimpa dan site kedua kehilangan vhost saat yang pertama dihapus. Hostname duplikat kini ditolak.
 - **#5** Panel tanpa validasi `Host` rentan DNS rebinding (bind loopback tidak menutupnya).
 - **#6** `php`/`root` dari request masuk mentah ke config nginx; injeksi terbukti lolos `nginx -t` di level renderer.
+- **#8** Setup tunnel Cloudflare dari UI tidak pernah bisa berhasil — enam bug sekaligus: `Setup()` mengabaikan parameter token (memakai klien yang di-wire saat boot dengan token kosong), `cf.Tunnel.Connections` bertipe `int` padahal API mengembalikan array, endpoint config memakai `/configuration` (singular, 404) alih-alih `/configurations`, `TunnelToken` memakai POST padahal Cloudflare hanya menerima GET, `server_names_hash_bucket_size` tidak diset sehingga hostname panjang ditolak `nginx -t`, dan UI membaca `Connections` sebagai angka.
 - php.ini per versi kini hanya memuat extension yang DLL-nya ada — `zip` di PHP 8.1 built-in, dan menulis `extension=zip` memunculkan warning tiap request.
 - Adapter Cloudflare selalu terpasang, jadi setup tunnel dari UI langsung berlaku untuk site berikutnya tanpa restart panel.
 

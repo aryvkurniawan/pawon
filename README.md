@@ -10,6 +10,7 @@ Panel webserver untuk Windows: **nginx + PHP (multi versi) + MariaDB + Cloudflar
 - **Multi-PHP per site** — 4 pool php-cgi (PHP 8.1 / 8.2 / 8.3 / 8.4), dropdown versi saat nambah site. Tiap seri punya folder `bin/php/<ver>/` + php.ini sendiri, jadi site lama bisa tetap di 8.1 sementara site baru pakai 8.4.
 - **Cloudflare Tunnel** — remotely-managed: ingress & DNS diatur via API, tanpa restart cloudflared. Nambah site = tulis vhost + tambah ingress + CNAME, otomatis.
 - **Alias lokal `*.test`** — tiap site bisa dibuka via `<sub>.<domain>` (tunnel) dan `<sub>.test` (lokal, tanpa tunnel).
+- **Mode lokal-saja** — centang "Lokal saja" saat nambah site: cukup vhost + hosts, tanpa menyentuh domain publik. Folder di `sites/` yang belum terdaftar muncul otomatis di halaman Sites (satu klik mengisi form) dan bisa **diterbitkan** ke domain kapan saja tanpa hapus+daftar ulang.
 - **phpMyAdmin bundel** — auto-site `pma.test`, login sekali-klik (kredensial root dari state).
 - **Composer runner** — jalankan `create-project`/`require`/`install` dari panel (whitelist subcommand).
 - **Log viewer** — php/nginx per-site/mariadb/cloudflared/laravel.log, tail + auto-refresh.
@@ -38,7 +39,7 @@ go build -o pawon.exe .
 
 1. Buka http://127.0.0.1:7080
 2. Halaman **Tunnel** → paste API token Cloudflare → panel membuat tunnel `pawon` + menyiapkan connector.
-3. Halaman **Sites** → Add Site: isi subdomain, pilih domain (zone), folder, tipe (php/laravel), versi PHP, centang "Create DB" kalau perlu.
+3. Halaman **Sites** → Add Site: isi subdomain, pilih domain (zone), folder, tipe (php/laravel), versi PHP, centang "Create DB" kalau perlu. Untuk eksperimen lokal tanpa menyentuh domain publik, centang **"Lokal saja"** (zone jadi tidak perlu) — site hidup di `http://<sub>.test` saja.
 4. Site live di `https://<sub>.<domain-kamu>` (via tunnel) dan `http://<sub>.test` (lokal).
 
 ### Laravel
@@ -83,8 +84,9 @@ Dokumen desain & plan implementasi ada di `docs/superpowers/` (lokal, tidak ikut
 
 ## Status / Catatan
 
-- ✅ Smoke end-to-end terverifikasi: first-run download, 6 service hijau, add/remove site (`*.test` 200 via FastCGI), Laravel via composer (`demo.test` 200), phpMyAdmin auto-login. Belum diverifikasi: setup tunnel (butuh paste token Cloudflare milik pengguna).
+- ✅ Smoke end-to-end terverifikasi: first-run download, 6 service hijau, add/remove site (`*.test` 200 via FastCGI), Laravel via composer (`demo.test` 200), phpMyAdmin auto-login.
 - ✅ Multi-PHP 8.1/8.2/8.3/8.4 terverifikasi: 16 worker php-cgi, tiap versi melayani `PHP_VERSION`-nya sendiri via `<sub>.test`.
+- ✅ Tunnel terverifikasi ke akun Cloudflare sungguhan (issue #8): connector `healthy` dengan 4 koneksi, 12 zone tersinkron, site publik dilayani PHP dari mesin lokal.
 - Fitur tunnel butuh paste token Cloudflare milikmu (tidak ada kredensial di repo).
 - Lihat [CHANGELOG.md](CHANGELOG.md).
 
