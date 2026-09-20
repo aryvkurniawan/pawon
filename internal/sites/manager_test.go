@@ -211,3 +211,266 @@ func TestDocrootLaravel(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestAddLocalOnlySkipsCloudflare(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/app"), 0o755)
+	st := baseState("tun1")
+	cf := &fakeCF{}
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, CF: cf}
+
+	// Tunnel sudah di-setup, tapi site lokal-saja tidak boleh menyentuh CF.
+	s, err := m.Add(AddParams{Subdomain: "app", Root: filepath.Join(root, "sites/app"), Type: "php", PHP: "8.4", LocalOnly: true})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !s.LocalOnly {
+		t.Error("LocalOnly tidak tersimpan di state")
+	}
+	if s.IngressOK || s.DNSOK {
+		t.Errorf("site lokal-saja ditandai ter-wire ke CF: ingress=%v dns=%v", s.IngressOK, s.DNSOK)
+	}
+	if cf.ingress != 0 || cf.cname != 0 {
+		t.Errorf("CF tersentuh padahal lokal-saja: ingress=%d cname=%d", cf.ingress, cf.cname)
+	}
+	// Hostname lokal-saja adalah <sub>.test, dan vhost tidak boleh
+	// menggandakannya jadi app.test.test.
+	if s.Hostname != "app.test" {
+		t.Errorf("hostname = %q, mau app.test", s.Hostname)
+	}
+	conf, err := os.ReadFile(s.NginxConf)
+	if err != nil {
+		t.Fatalf("baca vhost: %v", err)
+	}
+	if strings.Contains(string(conf), "app.test.test") {
+		t.Error("server_name menggandakan .test")
+	}
+	if !strings.Contains(string(conf), "server_name app.test;") {
+		t.Errorf("server_name tidak memuat app.test:\n%s", conf)
+	}
+}
+
+func TestAddWithoutZoneRequiresLocalOnly(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/app"), 0o755)
+	st := baseState("")
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+
+	if _, err := m.Add(AddParams{Subdomain: "app", Root: filepath.Join(root, "sites/app"), Type: "php", PHP: "8.4"}); err == nil {
+		t.Fatal("Add tanpa zone dan tanpa LocalOnly seharusnya gagal")
+	}
+}
+
+func TestAddRemembersLastZone(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/app"), 0o755)
+	st := baseState("")
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+
+	if _, err := m.Add(AddParams{Subdomain: "app", ZoneID: "z1", Root: filepath.Join(root, "sites/app"), Type: "php", PHP: "8.4"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if st.LastZoneID != "z1" {
+		t.Errorf("LastZoneID = %q, mau z1", st.LastZoneID)
+	}
+	// Harus ikut tersimpan, bukan cuma di memori.
+	saved, err := state.Load(m.StatePath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.LastZoneID != "z1" {
+		t.Errorf("LastZoneID tidak tersimpan ke disk: %q", saved.LastZoneID)
+	}
+}
+
+func TestScanFindsUnregisteredFolders(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	sitesDir := filepath.Join(root, "sites")
+	os.MkdirAll(filepath.Join(sitesDir, "app"), 0o755)
+	os.WriteFile(filepath.Join(sitesDir, "app", "index.php"), []byte("<?php"), 0o644)
+	os.MkdirAll(filepath.Join(sitesDir, "Blog Baru"), 0o755) // nama perlu disanitasi
+	os.MkdirAll(filepath.Join(sitesDir, "larry"), 0o755)
+	os.WriteFile(filepath.Join(sitesDir, "larry", "artisan"), []byte("#!/usr/bin/env php"), 0o644)
+	os.WriteFile(filepath.Join(sitesDir, "catatan.txt"), []byte("bukan folder"), 0o644)
+
+	st := baseState("")
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, SitesDir: sitesDir}
+
+	list, err := m.Scan()
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	got := map[string]Unregistered{}
+	for _, u := range list {
+		got[u.Name] = u
+	}
+	if len(got) != 3 {
+		t.Fatalf("Scan mengembalikan %d folder (%v), mau 3 (file biasa harus diabaikan)", len(got), got)
+	}
+	if !got["app"].HasApp {
+		t.Error("app punya index.php, HasApp harus true")
+	}
+	if got["Blog Baru"].Sub != "blog-baru" {
+		t.Errorf("sanitasi 'Blog Baru' = %q, mau blog-baru", got["Blog Baru"].Sub)
+	}
+	if got["larry"].Type != "laravel" {
+		t.Errorf("folder dengan artisan harus disarankan laravel, dapat %q", got["larry"].Type)
+	}
+
+	// Setelah didaftarkan, folder itu tidak boleh muncul lagi. Root ditulis
+	// dengan bentuk Windows supaya perbandingan path teruji.
+	st.AddSite(state.Site{Subdomain: "app", Root: filepath.FromSlash(filepath.ToSlash(filepath.Join(sitesDir, "app"))), Hostname: "app.test"})
+	list2, err := m.Scan()
+	if err != nil {
+		t.Fatalf("Scan kedua: %v", err)
+	}
+	for _, u := range list2 {
+		if u.Name == "app" {
+			t.Error("folder yang sudah terdaftar masih muncul di Scan")
+		}
+	}
+}
+
+func TestServerNames(t *testing.T) {
+	cases := []struct {
+		name string
+		s    state.Site
+		want []string
+	}{
+		{"publik", state.Site{Subdomain: "app", Hostname: "app.example.com"}, []string{"app.example.com", "app.test"}},
+		{"lokal saja", state.Site{Subdomain: "app", Hostname: "app.test", LocalOnly: true}, []string{"app.test"}},
+		// Penjaga berbasis hostname, bukan flag: site lama yang LocalOnly-nya
+		// belum tersimpan tetap tidak boleh digandakan.
+		{"hostname sudah .test", state.Site{Subdomain: "app", Hostname: "app.test"}, []string{"app.test"}},
+	}
+	for _, c := range cases {
+		got := ServerNames(c.s)
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: ServerNames = %v, mau %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestPublishLocalOnlySite(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/bk"), 0o755)
+	st := baseState("tun1")
+	cf := &fakeCF{}
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, CF: cf}
+
+	s, err := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	oldConf := s.NginxConf
+	// Simulasi site yang sudah punya DB: Publish tidak boleh menyentuhnya.
+	s.DB = &state.DBCreds{Name: "bk", User: "bk", Password: "rahasia"}
+	st.UpdateSite(s)
+
+	got, err := m.Publish(s.ID, "z1")
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if got.Hostname != "bk.example.com" {
+		t.Errorf("hostname = %q, mau bk.example.com", got.Hostname)
+	}
+	if got.LocalOnly {
+		t.Error("LocalOnly masih true setelah terbit")
+	}
+	if !got.IngressOK || !got.DNSOK {
+		t.Errorf("ingress/dns tidak ditandai: %v/%v", got.IngressOK, got.DNSOK)
+	}
+	if cf.ingress != 1 || cf.cname != 1 {
+		t.Errorf("CF dipanggil %d/%d kali, mau 1/1", cf.ingress, cf.cname)
+	}
+	// Kredensial DB harus selamat — inilah alasan Publish ada.
+	if got.DB == nil || got.DB.Password != "rahasia" {
+		t.Errorf("kredensial DB hilang: %+v", got.DB)
+	}
+	if got.ID != s.ID {
+		t.Errorf("ID site berubah: %q → %q", s.ID, got.ID)
+	}
+	// Vhost lama (nama file berubah) harus dibuang, yang baru memuat hostname publik.
+	if _, err := os.Stat(oldConf); !os.IsNotExist(err) {
+		t.Error("vhost lama masih ada")
+	}
+	conf, err := os.ReadFile(got.NginxConf)
+	if err != nil {
+		t.Fatalf("baca vhost baru: %v", err)
+	}
+	if !strings.Contains(string(conf), "bk.example.com") || !strings.Contains(string(conf), "bk.test") {
+		t.Errorf("vhost baru tidak memuat kedua hostname:\n%s", conf)
+	}
+}
+
+func TestPublishRejects(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/bk"), 0o755)
+
+	t.Run("tunnel belum setup", func(t *testing.T) {
+		st := baseState("")
+		m := &Manager{St: &st, StatePath: filepath.Join(dir, "p.json"),
+			StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+		s, _ := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+		if _, err := m.Publish(s.ID, "z1"); err == nil {
+			t.Fatal("Publish tanpa tunnel seharusnya gagal")
+		}
+	})
+
+	t.Run("sudah terbit", func(t *testing.T) {
+		st := baseState("tun1")
+		m := &Manager{St: &st, StatePath: filepath.Join(dir, "p2.json"),
+			StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+		s, _ := m.Add(AddParams{Subdomain: "bk", ZoneID: "z1", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4"})
+		if _, err := m.Publish(s.ID, "z1"); err == nil {
+			t.Fatal("Publish pada site yang sudah terbit seharusnya gagal")
+		}
+	})
+
+	t.Run("zone kosong", func(t *testing.T) {
+		st := baseState("tun1")
+		m := &Manager{St: &st, StatePath: filepath.Join(dir, "p3.json"),
+			StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+		s, _ := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+		if _, err := m.Publish(s.ID, ""); err == nil {
+			t.Fatal("Publish tanpa zone seharusnya gagal")
+		}
+	})
+}
+
+func TestPublishRollbackKeepsLocalVhost(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "stack")
+	os.MkdirAll(filepath.Join(root, "sites/bk"), 0o755)
+	st := baseState("tun1")
+	m := &Manager{St: &st, StatePath: filepath.Join(dir, "pawon.json"),
+		StackRoot: root, Run: &fakeRunner{}, CF: &fakeCF{}}
+	s, _ := m.Add(AddParams{Subdomain: "bk", Root: filepath.Join(root, "sites/bk"), Type: "php", PHP: "8.4", LocalOnly: true})
+
+	// nginx -t gagal → semua harus kembali seperti semula.
+	m.Run = &fakeRunner{failValidate: true}
+	if _, err := m.Publish(s.ID, "z1"); err == nil {
+		t.Fatal("Publish seharusnya gagal saat nginx -t gagal")
+	}
+	after, _ := st.Site(s.ID)
+	if !after.LocalOnly || after.Hostname != "bk.test" {
+		t.Errorf("state tidak dikembalikan: local_only=%v host=%q", after.LocalOnly, after.Hostname)
+	}
+	if _, err := os.Stat(filepath.Join(root, "nginx", "conf", "sites.d", "bk.example.com.conf")); !os.IsNotExist(err) {
+		t.Error("vhost publik tertinggal setelah gagal")
+	}
+	if _, err := os.Stat(filepath.Join(root, "nginx", "conf", "sites.d", "bk.test.conf")); err != nil {
+		t.Errorf("vhost lokal hilang setelah gagal: %v", err)
+	}
+}
