@@ -24,12 +24,15 @@ import (
 	"pawon/internal/dl"
 	"pawon/internal/hosts"
 	"pawon/internal/nginx"
+	"pawon/internal/pathutil"
 	"pawon/internal/php"
 	"pawon/internal/proc"
 	"pawon/internal/server"
+	"pawon/internal/shim"
 	"pawon/internal/sites"
 	"pawon/internal/state"
 	"pawon/internal/svc"
+	"pawon/internal/tray"
 	"pawon/internal/tunnel"
 )
 
@@ -39,6 +42,15 @@ var webFS embed.FS
 const panelAddr = "127.0.0.1:7080"
 
 func main() {
+	// Mode shim: binary dijalankan dengan nama alias (php.exe, composer.exe,
+	// mysql.exe, nginx.exe) → teruskan ke binary stack, jangan jalankan panel.
+	// Dicek paling awal, sebelum SCM/service, karena alias tidak pernah
+	// dimaksudkan untuk menjalankan panel.
+	if exe, err := os.Executable(); err == nil {
+		if shim.Run(exe, os.Args[1:]) {
+			return
+		}
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "pawon:", err)
 		os.Exit(1)
@@ -54,10 +66,18 @@ func run() error {
 				fmt.Fprintln(os.Stderr, "pawon:", err)
 			}
 		})
+	// PATH user: shim php/mysql/nginx/composer. Installer berjalan sekali dan
+	// tidak lewat panel(), jadi pendaftaran PATH dilakukan di sini juga —
+	// kalau hanya di panel(), `php` baru ketemu setelah panel pernah jalan.
 	case len(args) == 2 && args[0] == "service" && args[1] == "install":
-		return svc.Install()
+		return installService()
 	case len(args) == 2 && args[0] == "service" && args[1] == "remove":
 		return svc.Remove()
+	// Tray: proses terpisah di session pengguna. TIDAK boleh dijalankan dari
+	// dalam service — service hidup di Session 0 tanpa desktop, jadi ikonnya
+	// tidak akan pernah terlihat. Didaftarkan ke Run key HKCU.
+	case len(args) == 1 && args[0] == "tray":
+		return tray.Run()
 	case len(args) == 0:
 		return console()
 	}
@@ -67,10 +87,41 @@ func run() error {
 
 func usage() {
 	fmt.Fprint(os.Stderr, `pakai: pawon.exe                  # console: init stack + start service + UI
-       pawon.exe service install  # daftarkan Windows service (auto-start)
+       pawon.exe service install  # daftarkan Windows service + tray (auto-start)
        pawon.exe service remove   # hapus service
        pawon.exe service run      # dipanggil SCM; jangan dipanggil manual
+       pawon.exe tray             # ikon baki sistem (jalan di session pengguna)
 `)
+}
+
+// installService mendaftarkan Windows service lalu menyiapkan shim CLI +
+// PATH user, sehingga `php`/`mysql` ketemu dari cmd setelah install tanpa
+// menunggu panel dijalankan dulu. Kegagalan shim/PATH dilaporkan tapi tidak
+// membatalkan pendaftaran service — service tetap terpasang & bisa di-start,
+// dan panel() akan mencatat ulang kegagalan yang sama saat boot.
+func installService() error {
+	if err := svc.Install(); err != nil {
+		return err
+	}
+	root, err := stackRoot()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pawon: shim:", err)
+		return nil
+	}
+	for _, e := range pathutil.RegisterPath(root) {
+		fmt.Fprintln(os.Stderr, "pawon: shim:", e)
+	}
+	fmt.Println("pawon: shim CLI + PATH user siap (php, composer, mysql, nginx)")
+
+	// Tray hidup di session pengguna, jadi didaftarkan ke Run key HKCU —
+	// bukan ke service (Session 0 tidak punya desktop). Gagal tidak fatal:
+	// service tetap terpasang.
+	if err := tray.EnableAutostart(); err != nil {
+		fmt.Fprintln(os.Stderr, "pawon: tray:", err)
+	} else {
+		fmt.Println("pawon: tray terdaftar di Run key (mulai saat login)")
+	}
+	return nil
 }
 
 // console: panel foreground; Ctrl+C → stop semua service lalu keluar.
@@ -125,8 +176,19 @@ func panel(stop chan struct{}) error {
 	if err != nil {
 		return err
 	}
-
 	trace("mariadb home ok")
+
+	// Shim CLI: php/mysql/nginx/composer + PATH user. Gagal tidak fatal —
+	// panel tetap jalan tanpa `php` global (sama seperti wirePMA), hanya
+	// dicatat di log supaya kelihatan di Dashboard/log viewer.
+	if errs := pathutil.RegisterPath(root); len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Fprintln(os.Stderr, "pawon: pathutil:", e)
+			logf("pathutil: %v", e)
+		}
+	}
+	trace("shim CLI siap")
+
 	datadir := filepath.Join(dataDir, "mysql")
 	freshDB := false
 	if _, err := os.Stat(datadir); os.IsNotExist(err) {
