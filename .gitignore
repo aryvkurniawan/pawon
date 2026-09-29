@@ -6,3 +6,9 @@
 /pawon-data/
 /nginx/
 composer-out.log
+
+# backup biner hasil build (pawon.exe~) — 12 MB, tidak perlu ikut repo
+/pawon.exe~
+
+# dokumen kerja lokal (spec/plan/notes)
+/docs/
