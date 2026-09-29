@@ -4,7 +4,9 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi
 
 ## [Unreleased]
 
-Perbaikan enam bug yang dilaporkan di issue #1–#6 + multi-PHP 8.1–8.4.
+## [0.2.0] - 2026-09-29
+
+Rilis fitur: ikon baki sistem, shim CLI, multi-PHP 8.1–8.4, dan perbaikan enam bug dari issue #1–#6.
 
 ### Ditambahkan
 - **Shim CLI + PATH user**: `php`, `php81`–`php83`, `composer`, `mysql`, dan `nginx` bisa dipanggil dari terminal mana pun. Alias disalin ke `bin/shim` dan folder itu didaftarkan ke PATH user saat `service install` dan tiap boot panel.
