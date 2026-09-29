@@ -15,6 +15,7 @@ Panel webserver untuk Windows: **nginx + PHP (multi versi) + MariaDB + Cloudflar
 - **Log viewer** — php/nginx per-site/mariadb/cloudflared/laravel.log, tail + auto-refresh.
 - **First-run otomatis** — panel download & extract semua binary ter-pin (nginx, PHP NTS, MariaDB, cloudflared, composer, phpMyAdmin).
 - **Windows service** — `pawon.exe service install`; supervisor dengan Job Object (panel mati → semua anak mati) + auto-restart.
+- **Ikon baki sistem** — `pawon.exe tray`; warna ikon di pojok kanan bawah menunjukkan kesehatan stack, plus kontrol service dari menu klik-kanan.
 
 ## Persyaratan
 
@@ -40,6 +41,49 @@ go build -o pawon.exe .
 2. Halaman **Tunnel** → paste API token Cloudflare → panel membuat tunnel `pawon` + menyiapkan connector.
 3. Halaman **Sites** → Add Site: isi subdomain, pilih domain (zone), folder, tipe (php/laravel), versi PHP, centang "Create DB" kalau perlu.
 4. Site live di `https://<sub>.<domain-kamu>` (via tunnel) dan `http://<sub>.test` (lokal).
+
+### CLI dari terminal mana pun
+
+Panel menempatkan alias shim di `bin/shim` dan mendaftarkannya ke PATH user,
+jadi binary stack bisa dipanggil langsung:
+
+```powershell
+php -v              # PHP seri tertinggi yang terpasang
+php81 -v            # seri tertentu (php81 / php82 / php83)
+composer install    # composer.phar lewat PHP tertinggi
+mysql -uroot -p     # klien MariaDB
+nginx -s reload     # nginx milik panel (prefix-nya sudah benar)
+```
+
+Alias adalah salinan `pawon.exe` yang mendeteksi namanya sendiri lalu
+meneruskan argumen ke binary yang sesuai, termasuk exit code-nya. PATH
+diperbarui saat `service install` dan tiap boot panel — buka terminal baru
+bila terminal lama belum melihatnya.
+
+
+### Ikon baki sistem
+
+```powershell
+.\pawon.exe tray
+```
+
+Ikon muncul di pojok kanan bawah dan warnanya menunjukkan keadaan stack:
+
+| Warna | Arti |
+| --- | --- |
+| 🟢 Hijau | semua service jalan |
+| 🟡 Kuning | sebagian service jalan |
+| 🔴 Merah | panel tidak merespons, atau belum ada service |
+
+Klik-kanan ikon untuk membuka panel, menjalankan **Mulai / Berhenti /
+Ulangi** per service, atau menyalakan/mematikan **Mulai saat login**.
+Dobel-klik ikon = buka panel.
+
+`service install` mendaftarkan tray ke Run key HKCU supaya ikon muncul
+otomatis setelah login. Tray **tidak** dijalankan dari dalam service:
+service hidup di Session 0 tanpa desktop, jadi ikonnya tidak akan pernah
+terlihat — tray adalah proses terpisah di session pengguna yang memantau
+panel lewat HTTP.
 
 ### Laravel
 

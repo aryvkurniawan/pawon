@@ -7,12 +7,13 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi
 Perbaikan enam bug yang dilaporkan di issue #1–#6 + multi-PHP 8.1–8.4.
 
 ### Ditambahkan
-- Multi-PHP: pin PHP 8.1.34, 8.2.33, 8.3.33, 8.4.25 (NTS x64) dengan port pool kanonik 9100/9200/9300/9400. Tiap seri punya folder + php.ini sendiri.
+- **Shim CLI + PATH user**: `php`, `php81`–`php83`, `composer`, `mysql`, dan `nginx` bisa dipanggil dari terminal mana pun. Alias disalin ke `bin/shim` dan folder itu didaftarkan ke PATH user saat `service install` dan tiap boot panel.
+- **Ikon baki sistem** (`pawon.exe tray`): ikon berwarna di pojok kanan bawah — hijau bila semua service jalan, kuning bila sebagian, merah bila panel tidak merespons atau belum ada service. Menu klik-kanan berisi "Buka Panel", Mulai/Berhenti/Ulangi per service, dan "Mulai saat login" (Run key HKCU, didaftarkan saat `service install`). Tray adalah proses terpisah di session pengguna yang memantau `GET /api/status`, bukan bagian service: service hidup di Session 0 tanpa desktop sehingga tidak bisa menampilkan ikon. Ikon dibuat saat runtime ke `%LOCALAPPDATA%\pawon\` (tanpa berkas `.ico` di repo) dan dipasang ulang saat Explorer restart (`TaskbarCreated`).
 - Tombol **Buat DB** / **Reset DB** per site di halaman Sites (sebelumnya hanya saat create site).
 - Panel menulis `pawon-data/logs/pawon.log` — sebelumnya menu "Panel (pawon.log)" di log viewer selalu 404.
 - Validasi header `Host` (hanya `127.0.0.1:7080` / `localhost:7080`) + wajib `Content-Type: application/json` untuk endpoint mutasi.
 - Validasi input `php` (harus versi terpasang & aktif), `type` (php|laravel), dan `root` (absolut, tanpa karakter yang bisa memutus quoting config nginx).
-- Unit test untuk `versions` (port & URL pin), `seed` kanonik, `ensurePhpIni`, `panelLog`, guard Host/Content-Type, rollback `Add`, retry `writeAtomic`, dan idempotensi statement DB.
+- Unit test untuk `versions` (port & URL pin), `seed` kanonik, `ensurePhpIni`, `panelLog`, guard Host/Content-Type, rollback `Add`, retry `writeAtomic`, idempotensi statement DB, dan tray (status/kesehatan, tooltip, warna ikon, struktur ICO, header permintaan aksi service).
 
 ### Diperbaiki
 - **#1** Add site yang gagal setelah validate meninggalkan vhost orphan yang sudah aktif di nginx (nginx ter-reload sebelum langkah hosts). Urutan diubah: vhost → validate → hosts → CF → reload → save, dengan rollback berurutan terbalik.
