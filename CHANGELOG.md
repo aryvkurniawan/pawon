@@ -2,9 +2,18 @@
 
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi mengikuti [SemVer](https://semver.org/lang/id/).
 
-## [0.2.0] - 2026-09-29
+## [0.2.1] - 2026-09-29
 
-Enam bug dari issue #1–#6, enam bug setup tunnel dari issue #8, multi-PHP 8.1–8.4, mode lokal-saja, shim CLI, dan ikon baki sistem.
+Ikon baki sistem supaya keadaan stack terlihat tanpa membuka panel, dan shim CLI supaya binary stack bisa dipanggil dari terminal mana pun.
+
+### Ditambahkan
+- **Ikon baki sistem** (`pawon.exe tray`): ikon berwarna di pojok kanan bawah — hijau bila semua service jalan, kuning bila sebagian, merah bila panel tidak merespons atau belum ada service. Menu klik-kanan berisi "Buka Panel", Mulai/Berhenti/Ulangi per service, dan "Mulai saat login" (Run key HKCU, didaftarkan saat `service install`). Tray adalah proses terpisah di session pengguna yang memantau `GET /api/status`, bukan bagian service: service hidup di Session 0 tanpa desktop sehingga tidak bisa menampilkan ikon. Ikon dibuat saat runtime ke `%LOCALAPPDATA%\pawon\` (tanpa berkas `.ico` di repo) dan dipasang ulang saat Explorer restart (`TaskbarCreated`).
+- **Shim CLI + PATH user**: `php`, `php81`–`php83`, `composer`, `mysql`, dan `nginx` bisa dipanggil dari terminal mana pun. Alias disalin ke `bin/shim` dan folder itu didaftarkan ke PATH user saat `service install` dan tiap boot panel.
+- Unit test tray: status/kesehatan, tooltip, warna ikon, struktur ICO, dan header permintaan aksi service.
+
+## [0.2.0] - 2026-09-20
+
+Enam bug dari issue #1–#6, enam bug setup tunnel dari issue #8, multi-PHP 8.1–8.4, dan mode lokal-saja.
 
 **Catatan upgrade:** state lama otomatis termigrasi (PHP 8.4 dipetakan ke port kanonik 9400). PHP 8.1–8.3 akan diunduh saat pertama kali dijalankan. Tidak perlu hapus `pawon-data/`.
 
@@ -13,8 +22,6 @@ Enam bug dari issue #1–#6, enam bug setup tunnel dari issue #8, multi-PHP 8.1�
 - `GET /api/zones` kini membalas `{zones, last_zone_id}` (sebelumnya array polos), dan aset UI dikirim dengan `Cache-Control: no-cache, must-revalidate` supaya `app.js` lama tidak tertinggal di browser.
 
 ### Ditambahkan
-- **Ikon baki sistem** (`pawon.exe tray`): ikon berwarna di pojok kanan bawah — hijau bila semua service jalan, kuning bila sebagian, merah bila panel tidak merespons atau belum ada service. Menu klik-kanan berisi "Buka Panel", Mulai/Berhenti/Ulangi per service, dan "Mulai saat login" (Run key HKCU, didaftarkan saat `service install`). Tray adalah proses terpisah di session pengguna yang memantau `GET /api/status`, bukan bagian service: service hidup di Session 0 tanpa desktop sehingga tidak bisa menampilkan ikon. Ikon dibuat saat runtime ke `%LOCALAPPDATA%\pawon\` (tanpa berkas `.ico` di repo) dan dipasang ulang saat Explorer restart (`TaskbarCreated`).
-- **Shim CLI + PATH user**: `php`, `php81`–`php83`, `composer`, `mysql`, dan `nginx` bisa dipanggil dari terminal mana pun. Alias disalin ke `bin/shim` dan folder itu didaftarkan ke PATH user saat `service install` dan tiap boot panel.
 - Deteksi folder `sites/` + mode **lokal saja** (PR #10): `GET /api/sites/scan` melaporkan folder yang belum terdaftar (read-only, tidak auto-register — folder berisi `.env` tidak pernah terbit sendiri). Site lokal-saja cukup vhost + hosts, tanpa ingress/CNAME; zone jadi opsional dan yang terakhir dipakai diingat sebagai default.
 - **Terbitkan** site lokal-saja (`POST /api/sites/{id}/publish`) tanpa hapus+daftar ulang, sehingga kredensial DB yang tersimpan di state tidak hilang. Ada tombolnya di tabel Sites.
 - Multi-PHP: pin PHP 8.1.34, 8.2.33, 8.3.33, 8.4.25 (NTS x64) dengan port pool kanonik 9100/9200/9300/9400. Tiap seri punya folder + php.ini sendiri.
@@ -22,7 +29,7 @@ Enam bug dari issue #1–#6, enam bug setup tunnel dari issue #8, multi-PHP 8.1�
 - Panel menulis `pawon-data/logs/pawon.log` — sebelumnya menu "Panel (pawon.log)" di log viewer selalu 404.
 - Validasi header `Host` (hanya `127.0.0.1:7080` / `localhost:7080`) + wajib `Content-Type: application/json` untuk endpoint mutasi.
 - Validasi input `php` (harus versi terpasang & aktif), `type` (php|laravel), dan `root` (absolut, tanpa karakter yang bisa memutus quoting config nginx).
-- Unit test untuk `versions` (port & URL pin), `seed` kanonik, `ensurePhpIni`, `panelLog`, guard Host/Content-Type, rollback `Add`, retry `writeAtomic`, idempotensi statement DB, dan tray (status/kesehatan, tooltip, warna ikon, struktur ICO, header permintaan aksi service).
+- Unit test untuk `versions` (port & URL pin), `seed` kanonik, `ensurePhpIni`, `panelLog`, guard Host/Content-Type, rollback `Add`, retry `writeAtomic`, dan idempotensi statement DB.
 
 ### Diperbaiki
 - **#1** Add site yang gagal setelah validate meninggalkan vhost orphan yang sudah aktif di nginx (nginx ter-reload sebelum langkah hosts). Urutan diubah: vhost → validate → hosts → CF → reload → save, dengan rollback berurutan terbalik.
