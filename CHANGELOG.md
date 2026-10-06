@@ -2,6 +2,11 @@
 
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/); versi mengikuti [SemVer](https://semver.org/lang/id/).
 
+## [Belum rilis]
+
+### Diperbaiki
+- **Upload file gagal di semua site** (`UPLOAD_ERR_NO_TMP_DIR`): `cmd.Env` menggantikan seluruh environment, sehingga worker php-cgi lahir tanpa `TMP`/`TEMP` dan `sys_get_temp_dir()` jatuh ke `C:\WINDOWS` yang tidak writable. Env worker kini diisi `SystemRoot` + `TMP`/`TEMP` (`internal/php/pool.go`). Perbaikan sementara tanpa rebuild: `sys_temp_dir`/`upload_tmp_dir` di `bin/php/8.4/php.ini`.
+
 ## [0.2.1] - 2026-09-29
 
 Ikon baki sistem supaya keadaan stack terlihat tanpa membuka panel, dan shim CLI supaya binary stack bisa dipanggil dari terminal mana pun.

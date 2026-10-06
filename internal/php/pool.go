@@ -1,6 +1,7 @@
 package php
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -24,7 +25,15 @@ func Instances(v state.PHPVersion) []proc.Spec {
 			Name: "php-" + v.Version,
 			Exe:  "bin/php/" + v.Version + "/php-cgi.exe",
 			Args: []string{"-b", "127.0.0.1:" + strconv.Itoa(v.PortBase+i)},
-			Env:  []string{"PHP_FCGI_MAX_REQUESTS=500"},
+			// cmd.Env menggantikan seluruh environment; tanpa TMP/TEMP
+			// php-cgi fallback ke C:\WINDOWS (tak writable) → upload
+			// gagal UPLOAD_ERR_NO_TMP_DIR.
+			Env: []string{
+				"PHP_FCGI_MAX_REQUESTS=500",
+				"SystemRoot=" + os.Getenv("SystemRoot"),
+				"TMP=" + os.TempDir(),
+				"TEMP=" + os.TempDir(),
+			},
 			Dir:  "bin/php/" + v.Version,
 			Port: v.PortBase + i,
 		}
