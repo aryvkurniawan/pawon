@@ -38,6 +38,8 @@ func RenderVhost(v Vhost) string {
         include fastcgi_params;
         fastcgi_pass %s;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_buffer_size 32k;
+        fastcgi_buffers 16 32k;
     }
 }
 `, strings.Join(v.ServerNames, " "), v.Docroot, v.AccessLog, v.ErrorLog, v.Pool)

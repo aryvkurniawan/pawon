@@ -1,8 +1,11 @@
 package proc
 
 import (
+	"errors"
+	"net"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,5 +40,34 @@ func TestStartStopRealChild(t *testing.T) {
 	}
 	if s.Status()[0].Running {
 		t.Fatal("still running after Stop")
+	}
+}
+
+func TestStartRefusesWhenPortBusy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	s := New()
+	defer s.StopAll()
+	s.Set(Spec{Name: "x", Exe: "cmd", Args: []string{"/c", "exit"}, Port: port})
+	if err := s.Start("x"); err == nil || !strings.Contains(err.Error(), "sudah dijawab") {
+		t.Fatalf("want port-busy error, got %v", err)
+	}
+	if s.Status()[0].Running {
+		t.Fatal("must not spawn when port busy")
+	}
+}
+
+func TestStopNotRunningIsSentinel(t *testing.T) {
+	s := New()
+	defer s.StopAll()
+	s.Set(Spec{Name: "x", Exe: "cmd", Args: []string{"/c", "exit"}})
+	err := s.Stop("x")
+	if err == nil || !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("want ErrNotRunning, got %v", err)
 	}
 }

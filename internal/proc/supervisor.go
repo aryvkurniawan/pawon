@@ -5,9 +5,13 @@
 package proc
 
 import (
+	"errors"
 	"fmt"
+	"net"
+	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -19,6 +23,7 @@ type Spec struct {
 	Args []string
 	Env  []string // format "K=V"
 	Dir  string
+	Port int      // port kanonik; >0 → Start menolak jika port sudah dijawab proses lain
 }
 
 // Status is a point-in-time snapshot of one service.
@@ -75,6 +80,12 @@ func (s *Supervisor) Start(name string) error {
 	if e.running {
 		return fmt.Errorf("proc: %q already running", name)
 	}
+	if e.spec.Port != 0 {
+		if c, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(e.spec.Port), 300*time.Millisecond); err == nil {
+			c.Close()
+			return fmt.Errorf("proc: port %d sudah dijawab proses lain — hentikan instance %q lama dulu (lihat tasklist /FI \"IMAGENAME eq %s\")", e.spec.Port, name, e.spec.Exe)
+		}
+	}
 	cmd := exec.Command(e.spec.Exe, e.spec.Args...)
 	cmd.Env = e.spec.Env
 	cmd.Dir = e.spec.Dir
@@ -128,6 +139,10 @@ func (s *Supervisor) supervise(e *entry, cmd *exec.Cmd, done chan struct{}) {
 	}
 }
 
+// ErrNotRunning melaporkan stop atas service yang tidak sedang berjalan —
+// pemanggil restart boleh mengabaikannya.
+var ErrNotRunning = errors.New("proc: not running")
+
 // Stop kills the child of a service and waits for it to exit.
 func (s *Supervisor) Stop(name string) error {
 	s.mu.Lock()
@@ -139,13 +154,15 @@ func (s *Supervisor) Stop(name string) error {
 	if !e.running {
 		e.stopping = true // cancel any pending restart
 		s.mu.Unlock()
-		return fmt.Errorf("proc: %q not running", name)
+		return fmt.Errorf("%w: %q", ErrNotRunning, name)
 	}
 	e.stopping = true
 	done := e.done
 	cmd := e.cmd
 	s.mu.Unlock()
-	cmd.Process.Kill()
+	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("proc: kill %q (pid %d): %w", name, cmd.Process.Pid, err)
+	}
 	<-done
 	return nil
 }

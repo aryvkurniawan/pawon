@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,7 +70,11 @@ func (h handlers) service(op string) http.HandlerFunc {
 		case "stop":
 			err = h.Sup.Stop(name)
 		case "restart":
-			_ = h.Sup.Stop(name) // tidak jalan / belum ada → langsung start
+			if stopErr := h.Sup.Stop(name); stopErr != nil && !errors.Is(stopErr, proc.ErrNotRunning) {
+				// gagal kill (mis. proses elevated) → jangan spawn duplikat
+				err = stopErr
+				break
+			}
 			err = h.Sup.Start(name)
 		}
 		if err != nil {

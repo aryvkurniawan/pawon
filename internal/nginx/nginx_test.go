@@ -17,6 +17,8 @@ func TestRenderVhostHasPoolAndLogs(t *testing.T) {
 		"server_name app.example.com app.test;",
 		`root "C:/pawon/sites/app/public";`,
 		"fastcgi_pass php_84_pool;",
+		"fastcgi_buffer_size 32k;",
+		"fastcgi_buffers 16 32k;",
 		"try_files $uri $uri/ /index.php?$query_string;",
 		"try_files $fastcgi_script_name =404;",
 		"access_log",

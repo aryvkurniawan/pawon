@@ -223,6 +223,7 @@ func panel(stop chan struct{}) error {
 		Exe:  filepath.Join(nginxHome, "nginx.exe"),
 		Args: []string{"-p", prefix(nginxHome), "-c", filepath.ToSlash(mainConf)},
 		Dir:  nginxHome,
+		Port: 80,
 	})
 	sup.Set(proc.Spec{
 		Name: "mariadb",
@@ -234,7 +235,8 @@ func panel(stop chan struct{}) error {
 			// file log inilah yang dibaca log viewer UI.
 			"--log-error=" + filepath.ToSlash(filepath.Join(logsDir, "mariadb.log")),
 		},
-		Dir: filepath.Join(mariaHome, "bin"),
+		Dir:  filepath.Join(mariaHome, "bin"),
+		Port: 3306,
 	})
 	for _, v := range st.PHPVersions {
 		if !v.Enabled {

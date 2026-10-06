@@ -26,6 +26,7 @@ func Instances(v state.PHPVersion) []proc.Spec {
 			Args: []string{"-b", "127.0.0.1:" + strconv.Itoa(v.PortBase+i)},
 			Env:  []string{"PHP_FCGI_MAX_REQUESTS=500"},
 			Dir:  "bin/php/" + v.Version,
+			Port: v.PortBase + i,
 		}
 	}
 	return specs
